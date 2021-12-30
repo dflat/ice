@@ -8,6 +8,7 @@ from collections import deque, defaultdict
 import math
 import network
 import random
+import verts
 
 BG_COLOR = (68,52,86)#(213,221,239)#(76,57,79)#(240,240,255)
 RED = (255,0,0)
@@ -16,6 +17,46 @@ PLAYER_COLOR = pygame.Color(193,94,152)
 WIDTH = 640
 HEIGHT = 480
 IMAGE_PATH = os.path.join('assets','images')
+OBJ_PATH = os.path.join('assets','obj') 
+
+class Explosion(pygame.sprite.Sprite):
+    group = pygame.sprite.Group()
+    frame_dupes = [3]*10 #[1,1,1,1,1,1,1,1,1,1] #todo...use this
+    def __init__(self, pos):
+        super().__init__()
+        self.group.add(self)
+        self.h = 16
+        self.w = 16
+        self.pos = pos
+        self.color = (250,250,250)
+        self._load_frames()
+        self.frame_no = -1
+        self.dupes = 0
+
+    def _load_frames(self):
+        self.frames = []
+        vframes = verts.parse_obj(os.path.join(OBJ_PATH, 'explosion.obj'))
+        self.n_frames = len(vframes)
+        print('loaded', self.n_frames)
+        for i, vlist in enumerate(vframes):
+            alpha = 255*(1 - (i/self.n_frames))
+            im = pygame.Surface((self.w,self.h),
+                                pygame.SRCALPHA, 32)
+            pygame.draw.polygon(im, pygame.Color(*self.color), vlist)
+            self.frames.append(im)
+
+    def update(self, dt):
+        if self.frame_no < self.n_frames - 1:
+            if self.dupes > 0:
+                self.dupes -= 1
+            else:
+                self.frame_no += 1
+                self.dupes = self.frame_dupes[self.frame_no]
+        else:
+            self.kill()
+
+    def draw(self, screen):
+        screen.blit(self.frames[self.frame_no], self.pos)
 
 class Drop(pygame.sprite.Sprite):
     group = pygame.sprite.Group()
@@ -134,8 +175,8 @@ class Player(pygame.sprite.Sprite):
         self.t = 0
         self.vel = np.array([0,0], dtype=float)
         self.acc = np.array([0,0], dtype=float)
-        self.MAX_VEL = 640
-        self.MAX_ACC = 1600
+        self.MAX_VEL = 640*2
+        self.MAX_ACC = 1600*2
         self.left = False
         self.right = False
         self.pos_history = deque(maxlen=self.n_ghost_frames)
@@ -180,14 +221,12 @@ class Player(pygame.sprite.Sprite):
     def check_collisions(self):
         hit = pygame.sprite.spritecollideany(self, Drop.group)
         if hit:
-            print('got:', hit)
-            print('player pos when hit:', self.pos)
-            print('icicle pos when hit:', hit.pos)
             hit.kill()
             sound.play_next()
+            Explosion(hit.pos + np.array([0,hit.height]))
+             
 
     def update(self, dt):
-        self.check_collisions()
         self.dir = 1*self.right - 1*self.left
         self.t += dt
         #self.color = (127+20*math.sin(2*math.pi*self.t/(1000*3)),)*3
@@ -243,6 +282,7 @@ class Player(pygame.sprite.Sprite):
             self.pos[0] = 640 # - self.center_offset[0]
             #self.vel[0] = 0
         self.pos_history.append(self.pos.copy())
+        self.check_collisions()
 
     def draw(self, screen):
         if self.frame > self.n_ghost_frames:
@@ -393,6 +433,9 @@ def update(dt):
           drop.clear_force('wind')
       drop.update(dt)
 
+  for expl in Explosion.group:
+      expl.update(dt)
+
 def draw(screen):
   """
   Draw things to the window. Called once per frame.
@@ -407,6 +450,9 @@ def draw(screen):
 
   for drop in Drop.group:
       drop.draw(screen)
+
+  for expl in Explosion.group:
+      expl.draw(screen)
 
   pygame.display.flip()
 
