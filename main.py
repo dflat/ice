@@ -2,6 +2,7 @@ import sys
 import time
 import pygame
 import itertools
+import threading
 import os
 from pygame.locals import *
 import numpy as np
@@ -263,7 +264,7 @@ class Player(pygame.sprite.Sprite):
                 'feet':pygame.Color(235,191,73), 'beak': pygame.Color(235,191,73),
                 'eyeball':pygame.Color(255,255,255)
                 }
-    def __init__(self, color=PLAYER_COLOR, width=64, height=32):
+    def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=None):
         super().__init__()
         self.group.add(self) 
         self.width = width*2
@@ -279,6 +280,8 @@ class Player(pygame.sprite.Sprite):
         self._get_ghost_frames()
 
         self.pos = np.array([0,Ice.top - self.height/2], dtype=float)
+        if pos_x:
+            self.pos[0] = pos_x
         self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
         self.t = 0
         self.vel = np.array([0,0], dtype=float)
@@ -296,6 +299,16 @@ class Player(pygame.sprite.Sprite):
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
         self.direction = -1
         self.phase = 'slow'
+        self._connect_to_network()
+
+    def _connect_to_network(self):
+        self.client = None 
+        self.remote = threading.Event()
+        t = threading.Thread(target=netcon.link_player, args=(self,self.remote))
+        t.start()
+
+    def establish_link(self, client): # will be set by a thread in netcon class
+        self.client = client
 
     def _init_images(self):
         self.images = defaultdict(dict)
@@ -343,9 +356,10 @@ class Player(pygame.sprite.Sprite):
         dt /= 1000
 
         ## Fetch network control data
-        record = netcon.get_record()
-        if record:
-            self.x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
+        if self.client:
+            record = self.client.get_record()  #self.netcon.get_record()
+            if record:
+                self.x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
 
         ## Record acceleration due to player input
         self.acc[0] = self.x*self.MAX_ACC
@@ -524,17 +538,23 @@ class Wind:
             self.start()
 wind = Wind()
 
+def close_network_connections():
+  for player in Player.group:
+      player.remote.set()
+  netcon.shutdown()
+
+def quit():
+  close_network_connections()
+  pygame.quit() 
+  sys.exit() # Not including this line crashes the script on Windows. Possibly
+
 def update(dt):
   for event in pygame.event.get():
     if event.type == QUIT:
-      netcon.shutdown()
-      pygame.quit() # Opposite of pygame.init
-      sys.exit() # Not including this line crashes the script on Windows. Possibly
+        quit()
     if event.type == pygame.KEYDOWN:
         if event.key == K_q:
-          netcon.shutdown()
-          pygame.quit()
-          sys.exit()
+            quit()
         elif event.key == K_s:
             #player1.left = True
             pass
@@ -593,8 +613,6 @@ def draw(screen):
 
   pygame.display.flip()
 
-netcon = network.NetworkConnection()
-netcon.listen()
 
 def rescale(x, mn=-math.pi/2, mx=math.pi/2, a=0, b=WIDTH):
     return a + ((x - mn)*(b-a)) / ( mx - mn)
@@ -602,6 +620,9 @@ def rescale(x, mn=-math.pi/2, mx=math.pi/2, a=0, b=WIDTH):
 def clamp(x, mn=-1, mx=1):
     return min(mx, max(x, mn))
  
+netcon = network.NetworkConnection()
+netcon.listen()
+
 def run():
   pygame.init()
   fps = 60.0
@@ -610,7 +631,9 @@ def run():
   width, height = WIDTH, HEIGHT
   screen = pygame.display.set_mode((width, height))
   
-  player1 = Player()
+  player1 = Player(pos_x=100)
+  player2 = Player(pos_x=WIDTH - 100)
+
   ice = Ice()
 
   dt = 1/fps 
@@ -618,6 +641,6 @@ def run():
     update(dt)
     draw(screen)
     dt = fpsClock.tick(fps)
-    print('fps:', fpsClock.get_fps())
+  #  print('fps:', fpsClock.get_fps())
 
 run()

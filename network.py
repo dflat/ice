@@ -17,7 +17,25 @@ class Record:
         return f'Record({self.roll:.2f}, {self.pitch:.2f}, {self.yaw:.2f}'\
                 f', t={self.t})'
 
+class Client:
+    def __init__(self, addr):
+        self.addr = addr
+        self.q = queue.Queue()
+
+    def put(self, item): # used by NetworkConnection instance
+        self.q.put(item)
+
+    def get_record(self, block=False): # used by Player instance
+        if self.q.empty():
+            return None
+        return self.q.get(block=block)
+
+
 class NetworkConnection:
+    client_id = 0
+    clients = { }
+    linked_players = { }
+    _lock = threading.Lock()
 
     def __init__(self):
         self.remote = threading.Event()
@@ -37,25 +55,51 @@ class NetworkConnection:
         for record_bytes in struct.iter_unpack(Record.fmt, msg):
             yield Record(*record_bytes)
 
-    def get_record(self, block=False):
+    #def get_record(self, block=False): # defunct, replaced w/Client class
         #return self.attitude
 #        print('qsize:', self.q.qsize())
-        if self.q.empty():
-            return None
-        return self.q.get(block=block)
+    #    if self.q.empty():
+    #        return None
+    #    return self.q.get(block=block)
 
-    def update(self, record):
+    def update(self, record, addr):
         #latency = time.time() - record.t
         #print(f'latency: {latency*1000:.0f} ms')
         #print(f'delta time: {delta:.3f}')
         #self.last_t = record.t
-        self.q.put(record)
-        #print('got:', attitude)
+        try:
+            client = self.clients[addr]
+        except KeyError:
+            # assume new client
+            client = self.register_client(addr) 
+
+        client.put(record)
+
+        #self.q.put(record)
         
     def listen(self):
         t = threading.Thread(target=self._serve)
         t.start()
         print('Listening for data...')
+
+    def link_player(self, player, remote):
+        while not remote.is_set():
+            with self._lock:
+                for addr in self.clients:
+                    if addr in self.linked_players:
+                        continue
+                    else:        # give player reference to a dedicated client
+                        self.linked_players[addr] = id(player)
+                        player.establish_link(self.clients[addr])
+                        print('linked to player', id(player))
+                        return
+            print('attempting to link to player', id(player))
+            time.sleep(1)
+
+    def register_client(self, addr):
+        client = Client(addr)
+        self.clients[addr] = client
+        return client 
 
     def shutdown(self):
         self.remote.set()
@@ -73,7 +117,7 @@ class NetworkConnection:
                 if data: 
                     for record in self.parse_msg(data):
                         #print(record)
-                        self.update(record)
+                        self.update(record, addr)
                     #client.send(data) 
                 else:
                     print('no more data')
