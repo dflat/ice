@@ -38,7 +38,7 @@ def load_obj_frames(w, h, color, obj_filename, double_size=0):
         for _ in range(double_size):
             im = pygame.transform.scale2x(im) # todo: testing this
         if double_size == -1:
-            im = pygame.transform.scale(im, (w/2,h/2))
+            im = pygame.transform.scale(im, (w//2,h//2))
         frames.append(im)
     return frames
 
@@ -256,6 +256,7 @@ def assemble_image(surf, obj_filename, color_map):
     return surf
 
 class Player(pygame.sprite.Sprite):
+    collisions = { }
     group = set()
     # todo: make OrderedDict ??
     phases = ('slow',) + ('mid',) + ('normal',)*8
@@ -299,6 +300,7 @@ class Player(pygame.sprite.Sprite):
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
         self.direction = -1
         self.phase = 'slow'
+        self.getting_hit = False
         self._connect_to_network()
 
     def _connect_to_network(self):
@@ -349,6 +351,21 @@ class Player(pygame.sprite.Sprite):
             Explosion(hit.pos + np.array([0,hit.height]))
              
 
+    def check_if_hit_other_players(self):
+        others = self.group - {self}
+        hits = pygame.sprite.spritecollide(self, others, dokill=False)
+        for hit in hits:
+            if hit is self:
+                continue
+            if hit.getting_hit:
+                Player.collisions[hit] = self
+                continue
+            Player.collisions[self] = hit
+            hit.getting_hit = True
+            hit.vel += self.vel / 2
+            self.vel -= self.vel / 2 # todo.. testing
+            print('got a hit', hit)
+
     def update(self, dt): ## player
         self.dir = 1*self.right - 1*self.left
         self.t += dt
@@ -367,6 +384,17 @@ class Player(pygame.sprite.Sprite):
         ## Add environmental forces (e.g. wind)
         for force in self.environ_forces.values():
             self.acc += force 
+        
+        ## Update player physics
+        self.vel[0] += self.acc[0] * dt
+        self.vel[0] *= self.friction
+        self.vel[0] = max(-self.MAX_VEL, min(self.vel[0], self.MAX_VEL))
+        self.pos[0] += self.vel[0] * dt
+        #print('acc: %.2f, vel: %.2f, pos: %.2f' % (self.acc[0], self.vel[0], self.pos[0]))
+        self.pos[1] = Ice.top - self.height/2 # TODO make this dynamic
+        self.rect.x = self.pos[0]
+        self.rect.y = self.pos[1]
+        #self.pos -= self.center_offset
 
         ## Select the correct sprite image to display
         if self.acc[0] > 0:
@@ -379,7 +407,7 @@ class Player(pygame.sprite.Sprite):
         self.phase = self.phase_map[phase]
 
         self.display_image = self.images[self.direction][self.phase]
-        
+
         ## Control sounds and animations triggered by player state
         if self.phase != prev_phase:
             if self.phase == 'normal':
@@ -388,17 +416,6 @@ class Player(pygame.sprite.Sprite):
             elif prev_phase == 'normal':
                 sound.stop_looped('sliding', fade_ms=200)
                 SnowPlume.deactivate(self) 
-
-        ## Update player physics
-        self.vel[0] += self.acc[0] * dt
-        self.vel[0] *= self.friction
-        self.vel[0] = max(-self.MAX_VEL, min(self.vel[0], self.MAX_VEL))
-        self.pos[0] += self.vel[0] * dt
-        #print('acc: %.2f, vel: %.2f, pos: %.2f' % (self.acc[0], self.vel[0], self.pos[0]))
-        self.pos[1] = Ice.top - self.height/2 # TODO make this dynamic
-        self.rect.x = self.pos[0]
-        self.rect.y = self.pos[1]
-        #self.pos -= self.center_offset
 
         ## Apply horizontal boundary conditions
         if self.pos[0] > WIDTH:
@@ -411,6 +428,8 @@ class Player(pygame.sprite.Sprite):
 
         ## Collision checks TODO: player v player check
         self.check_collisions()
+        if not any(Player.collisions):
+            self.getting_hit = False
 
     def draw(self, screen):
         if self.frame > self.n_ghost_frames:
@@ -548,7 +567,7 @@ def quit():
   pygame.quit() 
   sys.exit() # Not including this line crashes the script on Windows. Possibly
 
-def update(dt):
+def update(dt): # game
   for event in pygame.event.get():
     if event.type == QUIT:
         quit()
@@ -574,12 +593,20 @@ def update(dt):
 
   wind.update()
 
+  Player.collisions = { }
+
   for player in Player.group:
+      # handle wind acceleration
       if wind.blowing:
           player.apply_force(wind.force*2, 'wind')
       else:
           player.clear_force('wind')
+
+      # collision check between players
+      player.check_if_hit_other_players()
+
       player.update(dt)
+      
  
   for drop in Drop.group:
       if wind.blowing:
