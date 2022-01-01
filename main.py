@@ -1,6 +1,7 @@
 import sys
 import time
 import pygame
+import itertools
 import os
 from pygame.locals import *
 import numpy as np
@@ -14,80 +15,152 @@ BG_COLOR = (68,52,86)#(213,221,239)#(76,57,79)#(240,240,255)
 RED = (255,0,0)
 GREY = pygame.Color(100,100,100)#(100,)*3
 PLAYER_COLOR = pygame.Color(193,94,152)
-WIDTH = 640
+WIDTH = 1200#640
 HEIGHT = 480
 IMAGE_PATH = os.path.join('assets','images')
 OBJ_PATH = os.path.join('assets','obj') 
 
+def load_obj_frames(w, h, color, obj_filename, double_size=0):
+    frames = []
+    vframes = verts.parse_obj(os.path.join(OBJ_PATH, obj_filename))
+    n_frames = len(vframes)
+    print('loaded', n_frames)
+    for i, vlist in enumerate(vframes):
+        if isinstance(color, list):
+            c = color[i]
+        else:
+            c = color
+        alpha = 255*(1 - (i/n_frames))
+        im = pygame.Surface((w,h),
+                            pygame.SRCALPHA, 32)
+        pygame.draw.polygon(im, pygame.Color(*c), vlist)
+        for _ in range(double_size):
+            im = pygame.transform.scale2x(im) # todo: testing this
+        if double_size == -1:
+            im = pygame.transform.scale(im, (w/2,h/2))
+        frames.append(im)
+    return frames
+
 class Explosion(pygame.sprite.Sprite):
     group = pygame.sprite.Group()
-    frame_dupes = [3]*10 #[1,1,1,1,1,1,1,1,1,1] #todo...use this
+    frame_dupes = [3]*10
+    w = 16
+    h = 16
+    color = (250,250,250)
+    frames = load_obj_frames(w, h, color, 'explosion.obj', double_size=1)
+    n_frames = len(frames)
+
     def __init__(self, pos):
         super().__init__()
         self.group.add(self)
-        self.h = 16
-        self.w = 16
         self.pos = pos
-        self.color = (250,250,250)
-        self._load_frames()
         self.frame_no = -1
         self.dupes = 0
-
-    def _load_frames(self):
-        self.frames = []
-        vframes = verts.parse_obj(os.path.join(OBJ_PATH, 'explosion.obj'))
-        self.n_frames = len(vframes)
-        print('loaded', self.n_frames)
-        for i, vlist in enumerate(vframes):
-            alpha = 255*(1 - (i/self.n_frames))
-            im = pygame.Surface((self.w,self.h),
-                                pygame.SRCALPHA, 32)
-            pygame.draw.polygon(im, pygame.Color(*self.color), vlist)
-            self.frames.append(im)
+        self.boundary = self.n_frames - 1
 
     def update(self, dt):
-        if self.frame_no < self.n_frames - 1:
+        if self.frame_no < self.boundary:
             if self.dupes > 0:
                 self.dupes -= 1
             else:
                 self.frame_no += 1
                 self.dupes = self.frame_dupes[self.frame_no]
         else:
-            self.kill()
+            self.animation_finished()
+
+    def animation_finished(self):
+        self.kill()
 
     def draw(self, screen):
         screen.blit(self.frames[self.frame_no], self.pos)
+
+class SnowPlume(Explosion):
+    w = 32
+    h = 8
+    color = [pygame.Color(232,238,252).lerp(BG_COLOR, .1 - .02*i) for i in range(5)]
+    frames = load_obj_frames(w, h, color, 'snow_plume.obj', double_size=2)
+    flipped = [pygame.transform.flip(im,True,False) for im in frames]
+    n_frames = len(frames)
+    frame_dupes = [2]*n_frames
+    offset = np.array([12, 32])
+    flipped_offset = np.array([-offset[0], offset[1]])
+    active = { }
+    frame_seq = list(range(n_frames)) + list(reversed(range(n_frames)))[1:-1]
+
+    def __init__(self, pos, player):
+        super().__init__(pos)
+        self.player = player
+        self.active[id(player)] = self
+        self.killed = False
+        self.frame_gen = self.get_next_frame()
+
+    def update(self, dt):
+        prev_frame_no = self.frame_no
+        self.frame_no = next(self.frame_gen)
+        if self.killed and self.frame_no == 1 and prev_frame_no == 0:
+            self.kill()
+
+    @classmethod
+    def deactivate(cls, player):
+       cls.active[id(player)].finish() 
+
+    def get_next_frame(self):
+        for frame_no in itertools.cycle(self.frame_seq):
+            for active_frame in itertools.repeat(frame_no, self.frame_dupes[frame_no]):
+                yield active_frame
+        
+    def animation_finished(self):
+        self.frame_no = 0 # this will loop forever, todo: ping pong
+
+    def finish(self):
+        self.killed = True
+
+    def ping_pong(self, start_frame, end_frame):
+        pass
+
+    def draw(self, screen):
+        if self.player.direction == 1:
+            frames = self.frames
+            offset = self.offset
+        else:
+            frames = self.flipped
+            offset = self.flipped_offset 
+        screen.blit(frames[self.frame_no], self.pos + offset)
+
+class Twinkle(Explosion):
+    w = 16
+    h = 16
+    color = (250,250,250)
+    frames = load_obj_frames(w, h, color, 'explosion.obj', double_size=-1)
+    frame_dupes = [1]*10
+
+    def __init__(self, pos):
+        super().__init__(pos)
+        self.offset = np.array([6*random.random(), 24*random.random()])
+
+    def draw(self, screen):
+        screen.blit(self.frames[self.frame_no], self.pos + self.offset)
 
 class Drop(pygame.sprite.Sprite):
     group = pygame.sprite.Group()
     COLORS = [pygame.Color(150, 188, 222), pygame.Color(161, 206, 229),
                 pygame.Color(169, 217, 231), pygame.Color(187, 228, 233),
                 pygame.Color(216, 233, 236), pygame.Color(174, 220, 220)]
+
+    _image_cache = { }
+
     def __init__(self, x, y, height=48, width=16):
         super().__init__()
         self.group.add(self) 
         self.width = width
         self.height = height
-        #self.image0 = pygame.Surface([width, height])
-        self.image0 = pygame.Surface((width,height),
-                                pygame.SRCALPHA, 32)
-        self.rect = self.image0.get_rect()
-
         self._color = random.choice(self.COLORS)
         self.color = self._color
-        self.r = self.width
-        #self.vertices=[(self.r/3, 2*self.r), (2*self.r- self.r/3, 2*self.r), (self.r, 0)]
-        self.vertices = [(0, 0), (width, 0), (width/2, height)]
-        pygame.draw.polygon(self.image0, self.color, self.vertices)
-        self.image = self.image0.copy()
-        #self.image.fill(self.color)
+        self._load_image(self.width, self.height, self.color)
+        self.rect = self.image.get_rect()
 
         self.n_ghost_frames = 0
         self._get_ghost_frames()
-        #pygame.draw.rect(self.image,
-        #                 self.color,
-        #                 pygame.Rect(0, 0, width, height))
-        self.rect = self.image.get_rect() 
         self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
         self.pos = np.array([x,y], dtype=float)
         self.vel = np.array([0,0], dtype=float)
@@ -97,6 +170,24 @@ class Drop(pygame.sprite.Sprite):
         self.pos_history = deque(maxlen=self.n_ghost_frames)
         self.frame = 0
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
+        self.twinkle_freq = random.randint(60*1, 60*2)
+        self.max_rotation = random.randint(10, 40)
+
+    def _load_image(self, w, h, color):
+        im = self._image_cache.get((w,h,tuple(color)))
+        if not im: 
+            w, h = self.width/2, self.height/2
+            im = pygame.Surface((w,h), pygame.SRCALPHA, 32)
+            self.vertices = [(0, h/7), ((w-1)/3, 1), ((2/3)*(w-1),1),
+                                (w-1, h/8), ((w-1)/2, h-1)]
+            pygame.draw.polygon(im, self.color, self.vertices)
+            shading_verts = [((2/3)*(w-1),1),
+                                (w-1, h/8), ((w-1)/2, h-1)]
+            pygame.draw.polygon(im, self.color.lerp((255,255,255), .25), shading_verts)
+            im = pygame.transform.scale2x(im)
+            self._image_cache[(w,h,tuple(color))] = im
+        self.image0 = im
+        self.image = im.copy()
 
     def apply_force(self, force, name):
         self.environ_forces[name] += force
@@ -115,22 +206,30 @@ class Drop(pygame.sprite.Sprite):
 
     def update(self, dt):
         self.frame += 1
+
+        # check if off-screen
         if self.pos[1] > HEIGHT + self.height:
             sound.register_miss()
             return self.kill()
-        dt /= 1000
 
+        # environmental forces
         for force in self.environ_forces.values():
             self.acc += force
 
-        #self.vel[1] += self.acc[1]*dt
-        #self.pos[1] += self.vel[1]*dt
+        # physics simulation
+        dt /= 1000
         self.vel += self.acc*dt
         self.vel[0] *= .90 # horizontal air resistance
         self.pos += self.vel*dt
         self.rect.x = self.pos[0]
         self.rect.y = self.pos[1]
+
+        # remember position history
         self.pos_history.append(self.pos.copy())
+
+        # special animations
+        if self.frame % self.twinkle_freq == 0:
+            Twinkle(self.pos)# + np.array([0, self.height*random.random()]))
 
     def draw(self, screen):
         if self.frame > self.n_ghost_frames:
@@ -148,28 +247,37 @@ class Drop(pygame.sprite.Sprite):
             pygame.draw.polygon(im, self.ghost_colors[i], self.vertices)
             self.ghost_images.append(im)
 
+def assemble_image(surf, obj_filename, color_map):
+    path = os.path.join(OBJ_PATH, obj_filename)
+    parts = verts.parse_obj_as_dict(path)
+    for key in color_map: 
+        pygame.draw.polygon(surf, color_map[key], parts[key][0])
+    return surf
+
 class Player(pygame.sprite.Sprite):
     group = set()
-    def __init__(self, color=PLAYER_COLOR, height=32, width=64):
+    # todo: make OrderedDict ??
+    phases = ('slow',) + ('mid',) + ('normal',)*8
+    phase_map = dict(zip(range(len(phases)), phases))
+    color_map = {'base':pygame.Color(0,0,0), 'belly':pygame.Color(240,240,240),
+                'feet':pygame.Color(235,191,73), 'beak': pygame.Color(235,191,73),
+                'eyeball':pygame.Color(255,255,255)
+                }
+    def __init__(self, color=PLAYER_COLOR, width=64, height=32):
         super().__init__()
         self.group.add(self) 
         self.width = width*2
         self.height = height*2
-#        self.image = pygame.Surface([width, height])
         self._init_images()
         self.image = self.images[-1]['normal']
+        self.rect = self.image.get_rect() 
 
         self._color = color
         self.color = color
-        #self.image.fill(color)
-        #self.image.set_colorkey(COLOR)
 
-        self.n_ghost_frames = 6
+        self.n_ghost_frames = 5
         self._get_ghost_frames()
-        #pygame.draw.rect(self.image,
-        #                 color,
-        #                 pygame.Rect(0, 0, width, height))
-        self.rect = self.image.get_rect() 
+
         self.pos = np.array([0,Ice.top - self.height/2], dtype=float)
         self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
         self.t = 0
@@ -184,12 +292,14 @@ class Player(pygame.sprite.Sprite):
         self.missed = 0
         self.x = 0
         self.frame = 0
+        self.friction = 0.99
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
         self.direction = -1
+        self.phase = 'slow'
 
     def _init_images(self):
         self.images = defaultdict(dict)
-        for phase in ('normal', 'slow'):
+        for phase in self.phases:
             im = pygame.image.load(os.path.join(
                             IMAGE_PATH, f'penguin_{phase}.png')).convert_alpha()
             im = pygame.transform.scale2x(im)
@@ -211,7 +321,7 @@ class Player(pygame.sprite.Sprite):
         n = self.n_ghost_frames
         self.ghost_images = defaultdict(lambda: defaultdict(list))
         self.ghost_alphas = [int(40 * ((i+1)/n) ) for i in range(n)]
-        for phase in ('normal','slow'):
+        for phase in self.phases:
             for i in range(n):
                 im = self.images[-1][phase].copy()
                 im.set_alpha(self.ghost_alphas[i])
@@ -226,62 +336,66 @@ class Player(pygame.sprite.Sprite):
             Explosion(hit.pos + np.array([0,hit.height]))
              
 
-    def update(self, dt):
+    def update(self, dt): ## player
         self.dir = 1*self.right - 1*self.left
         self.t += dt
-        #self.color = (127+20*math.sin(2*math.pi*self.t/(1000*3)),)*3
-        #self.image.fill(self.color)
-        record = netcon.get_record()
-        #if record is None:
-        #    if self.frame > 0:
-        #        self.missed += 1
-        #    return
         self.frame += 1
-        #print('miss rate: %.2f per second' % (self.missed/(self.t/1000)))
+        dt /= 1000
+
+        ## Fetch network control data
+        record = netcon.get_record()
         if record:
             self.x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
-        #print('roll: %.2f, x: %.2f' % (record.roll, x))
-#        print(f'roll:{roll:.2f}, pos:{x:.1f}')
-        #y = rescale(pitch)
-        dt /= 1000
+
+        ## Record acceleration due to player input
         self.acc[0] = self.x*self.MAX_ACC
 
+        ## Add environmental forces (e.g. wind)
         for force in self.environ_forces.values():
-            self.acc += force # add environmental forces (e.g. wind)
+            self.acc += force 
 
-        # select the correct image to display
+        ## Select the correct sprite image to display
         if self.acc[0] > 0:
             self.direction = 1
         else:
             self.direction = -1
-        if abs(self.vel[0]) < self.MAX_VEL / 2:
-            self.phase = 'slow'
-        else:
-            self.phase = 'normal'
+
+        prev_phase = self.phase 
+        phase = int(rescale(abs(self.vel[0]), mn=0, mx=self.MAX_VEL, a=0, b=9))
+        self.phase = self.phase_map[phase]
 
         self.display_image = self.images[self.direction][self.phase]
+        
+        ## Control sounds and animations triggered by player state
+        if self.phase != prev_phase:
+            if self.phase == 'normal':
+                sound.start_looped('sliding')
+                SnowPlume(self.pos, self)
+            elif prev_phase == 'normal':
+                sound.stop_looped('sliding', fade_ms=200)
+                SnowPlume.deactivate(self) 
 
-        #self.acc[0] += self.dir*self.MAX_ACC/60
-        #self.acc[0] = clamp(self.acc[0], -self.MAX_ACC, self.MAX_ACC)
+        ## Update player physics
         self.vel[0] += self.acc[0] * dt
-        self.vel[0]*= .99 # friction
+        self.vel[0] *= self.friction
         self.vel[0] = max(-self.MAX_VEL, min(self.vel[0], self.MAX_VEL))
-        #self.pos[0] += 0.5*self.acc[0]*dt*dt + self.vel[0]*dt
-        self.pos[0] += self.vel[0]*dt
-        print('acc: %.2f, vel: %.2f, pos: %.2f' % (self.acc[0], self.vel[0], self.pos[0]))
+        self.pos[0] += self.vel[0] * dt
+        #print('acc: %.2f, vel: %.2f, pos: %.2f' % (self.acc[0], self.vel[0], self.pos[0]))
         self.pos[1] = Ice.top - self.height/2 # TODO make this dynamic
         self.rect.x = self.pos[0]
         self.rect.y = self.pos[1]
         #self.pos -= self.center_offset
 
-        # apply boundary conditions
-        if self.pos[0] > 640:
+        ## Apply horizontal boundary conditions
+        if self.pos[0] > WIDTH:
             self.pos[0] = -self.width #640 - self.center_offset[0]
-            #self.vel[0] = 0
         elif self.pos[0] < -self.width:
-            self.pos[0] = 640 # - self.center_offset[0]
-            #self.vel[0] = 0
+            self.pos[0] = WIDTH # - self.center_offset[0]
+
+        ## Record position history for ghosting effect
         self.pos_history.append(self.pos.copy())
+
+        ## Collision checks TODO: player v player check
         self.check_collisions()
 
     def draw(self, screen):
@@ -320,8 +434,7 @@ class Ice:
     def __init__(self):
         self.group.add(self)
         self.color = pygame.Color(232,238,252,255)
-        self.image = vertical_gradient((640,80), BG_COLOR+(255,), self.color)
-        #self.image.fill(self.color)
+        self.image = vertical_gradient((WIDTH,80), BG_COLOR+(255,), self.color)
         self.pos = np.array([0,self.top])
         self.rect = self.image.get_rect()
     def draw(self, screen):
@@ -338,10 +451,24 @@ class Sound:
         self.index = 0
         self.is_combo = False
         self.last_hit_time = 0
+        self._start_bg_noise()
+
+    def _start_bg_noise(self):
+        self.sounds['static'].play(loops=-1)
+        self.looping['static'] = self.sounds['static']
 
     def _load_sounds(self):
         self.sounds = { }
+        self.looping = { }
         for path in os.scandir(os.path.join(self.SOUNDS_PATH, 'icicles')):
+            name = path.name.split('.')[0]
+            sound = pygame.mixer.Sound(path.path)
+            self.sounds[name] = sound
+        for path in os.scandir(os.path.join(self.SOUNDS_PATH, 'environment')):
+            name = path.name.split('.')[0]
+            sound = pygame.mixer.Sound(path.path)
+            self.sounds[name] = sound
+        for path in os.scandir(os.path.join(self.SOUNDS_PATH, 'penguin')):
             name = path.name.split('.')[0]
             sound = pygame.mixer.Sound(path.path)
             self.sounds[name] = sound
@@ -349,6 +476,16 @@ class Sound:
     def register_miss(self):
         self.is_combo = False
         self.index = 0
+
+    def start_looped(self, name):
+        snd = self.sounds[name]
+        snd.play(loops=-1)
+        self.looping[name] = snd
+
+    def stop_looped(self, name, fade_ms=0):
+        snd = self.looping.get(name)
+        if snd:
+            snd.fadeout(fade_ms)
 
     def play_next(self):
         self.sounds[self.order[self.index]].play()
@@ -375,7 +512,6 @@ class Wind:
 
     def update(self):
         if self.blowing:
-            print('wind', self.frame)
             self.frame += 1
             if self.frame == self.n_frames:
                 self.blowing = False
@@ -428,7 +564,8 @@ def update(dt):
   for drop in Drop.group:
       if wind.blowing:
           drop.apply_force(wind.force*0.025, 'wind')
-          drop.rotate(30*math.sin(math.pi*wind.frame/wind.n_frames))
+          drop.rotate(drop.max_rotation*wind.direction*math.sin(
+                                math.pi*wind.frame/wind.n_frames))
       else:
           drop.clear_force('wind')
       drop.update(dt)
@@ -481,5 +618,6 @@ def run():
     update(dt)
     draw(screen)
     dt = fpsClock.tick(fps)
+    print('fps:', fpsClock.get_fps())
 
 run()
