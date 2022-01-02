@@ -3,19 +3,7 @@ import threading
 import time
 import struct
 import queue
-
-class Record:
-    __slots__ = ('roll', 'pitch', 'yaw', 't')
-    fmt = 'bbb'
-
-    def __init__(self, roll, pitch, yaw, t=0):
-        self.roll = roll
-        self.pitch = pitch
-        self.yaw = yaw
-        self.t = t
-    def __repr__(self):
-        return f'Record({self.roll:.2f}, {self.pitch:.2f}, {self.yaw:.2f}'\
-                f', t={self.t})'
+from data_structures import Record
 
 class Client:
     def __init__(self, addr):
@@ -36,6 +24,7 @@ class NetworkConnection:
     clients = { }
     linked_players = { }
     _lock = threading.Lock()
+    greeting = b'hi' # todo: abstract this to some config dict
 
     def __init__(self):
         self.remote = threading.Event()
@@ -50,17 +39,9 @@ class NetworkConnection:
         self.q = queue.Queue()
 
     def parse_msg(self, msg):
-        #print('raw:', msg)
         n_bytes = len(msg) 
         for record_bytes in struct.iter_unpack(Record.fmt, msg):
             yield Record(*record_bytes)
-
-    #def get_record(self, block=False): # defunct, replaced w/Client class
-        #return self.attitude
-#        print('qsize:', self.q.qsize())
-    #    if self.q.empty():
-    #        return None
-    #    return self.q.get(block=block)
 
     def update(self, record, addr):
         #latency = time.time() - record.t
@@ -74,8 +55,6 @@ class NetworkConnection:
             client = self.register_client(addr) 
 
         client.put(record)
-
-        #self.q.put(record)
         
     def listen(self):
         t = threading.Thread(target=self._serve)
@@ -104,29 +83,24 @@ class NetworkConnection:
     def shutdown(self):
         self.remote.set()
 
+    def greet(self, addr):
+        self.s.sendto(b'hi', addr)
+
     def _serve(self):
-       # self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.s.bind((self.host,self.port)) 
-       # self.s.listen(self.backlog) 
-       # client, address = self.s.accept() 
-       # print(f'Connected to {address}')
         while not self.remote.is_set(): 
             try:
                 data, addr = self.s.recvfrom(self.size) 
-                if data: 
+                if data == self.greeting:  # testing this here, in main game loop
+                    self.greet(addr)
+                else:
                     for record in self.parse_msg(data):
                         #print(record)
                         self.update(record, addr)
                     #client.send(data) 
-                else:
-                    print('no more data')
-                    break
             except KeyboardInterrupt:
                 break
             except:
                 print('unhandled excpetion!')
-                #client.close()
                 raise
-        #print('closing.')
-        #client.close()

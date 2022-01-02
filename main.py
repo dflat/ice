@@ -258,20 +258,21 @@ def assemble_image(surf, obj_filename, color_map):
 class Player(pygame.sprite.Sprite):
     collisions = { }
     group = set()
-    # todo: make OrderedDict ??
-    phases = ('slow',) + ('mid',) + ('normal',)*8
+    n_phases = 12
+    phases = ['1','2','3','4'] + ['5']*(n_phases - 3)
     phase_map = dict(zip(range(len(phases)), phases))
     color_map = {'base':pygame.Color(0,0,0), 'belly':pygame.Color(240,240,240),
                 'feet':pygame.Color(235,191,73), 'beak': pygame.Color(235,191,73),
                 'eyeball':pygame.Color(255,255,255)
                 }
-    def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=None):
+    def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=None, skin=None):
         super().__init__()
         self.group.add(self) 
         self.width = width*2
         self.height = height*2
+        self.skin = skin
         self._init_images()
-        self.image = self.images[-1]['normal']
+        self.image = self.images[-1]['1']
         self.rect = self.image.get_rect() 
 
         self._color = color
@@ -299,8 +300,9 @@ class Player(pygame.sprite.Sprite):
         self.friction = 0.99
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
         self.direction = -1
-        self.phase = 'slow'
+        self.phase = self.phases[0]
         self.getting_hit = False
+        self.jumping = False
         self._connect_to_network()
 
     def _connect_to_network(self):
@@ -314,9 +316,14 @@ class Player(pygame.sprite.Sprite):
 
     def _init_images(self):
         self.images = defaultdict(dict)
-        for phase in self.phases:
+        for phase in set(self.phases):
             im = pygame.image.load(os.path.join(
                             IMAGE_PATH, f'penguin_{phase}.png')).convert_alpha()
+            if self.skin:
+                skin_im = pygame.image.load(os.path.join(
+                                IMAGE_PATH, f'{self.skin}.png')).convert_alpha()
+                im.blit(skin_im, (0,0))
+
             im = pygame.transform.scale2x(im)
             flipped = pygame.transform.flip(im,True,False)
             self.images[-1][phase] = im 
@@ -373,25 +380,47 @@ class Player(pygame.sprite.Sprite):
         dt /= 1000
 
         ## Fetch network control data
+        jump_pressed = False
         if self.client:
             record = self.client.get_record()  #self.netcon.get_record()
             if record:
                 self.x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
+                jump_pressed = record.jump_pressed()
 
-        ## Record acceleration due to player input
+        if jump_pressed and not self.jumping:
+            print('jump pressed') 
+            self.vel[1] += 1000
+            self.jumping = True
+
+        ## Set acceleration due to player input
         self.acc[0] = self.x*self.MAX_ACC
 
         ## Add environmental forces (e.g. wind)
         for force in self.environ_forces.values():
             self.acc += force 
-        
+
+        ## Apply gravity 
+        #self.acc[1] -= 30*dt
+        #self.vel[1] += self.acc[1] * dt
+        if self.jumping:
+            self.vel[1] -= 3000*dt
+        self.vel[1] = max(-self.MAX_VEL, min(self.vel[1], self.MAX_VEL))
+        #print('y vel:', self.vel[1])
+        self.pos[1] -= self.vel[1] * dt 
+        # TODO: fix this hack
+        if self.vel[1] < 0 and self.pos[1] >= Ice.top - self.height/2 + 2:
+            self.jumping = False
+            print('stopped')
+            self.vel[1] = 0
+        self.pos[1] = min(self.pos[1], Ice.top - self.height/2)
+
         ## Update player physics
         self.vel[0] += self.acc[0] * dt
         self.vel[0] *= self.friction
         self.vel[0] = max(-self.MAX_VEL, min(self.vel[0], self.MAX_VEL))
         self.pos[0] += self.vel[0] * dt
         #print('acc: %.2f, vel: %.2f, pos: %.2f' % (self.acc[0], self.vel[0], self.pos[0]))
-        self.pos[1] = Ice.top - self.height/2 # TODO make this dynamic
+        #self.pos[1] = Ice.top - self.height/2 # TODO make this dynamic
         self.rect.x = self.pos[0]
         self.rect.y = self.pos[1]
         #self.pos -= self.center_offset
@@ -403,17 +432,18 @@ class Player(pygame.sprite.Sprite):
             self.direction = -1
 
         prev_phase = self.phase 
-        phase = int(rescale(abs(self.vel[0]), mn=0, mx=self.MAX_VEL, a=0, b=9))
-        self.phase = self.phase_map[phase]
+        phase_index = int(rescale(abs(self.vel[0]), mn=0, mx=self.MAX_VEL, 
+                                                    a=0, b=self.n_phases))
+        self.phase = self.phase_map[phase_index]
 
         self.display_image = self.images[self.direction][self.phase]
 
         ## Control sounds and animations triggered by player state
         if self.phase != prev_phase:
-            if self.phase == 'normal':
+            if self.phase == '5':
                 sound.start_looped('sliding')
                 SnowPlume(self.pos, self)
-            elif prev_phase == 'normal':
+            elif prev_phase == '5':
                 sound.stop_looped('sliding', fade_ms=200)
                 SnowPlume.deactivate(self) 
 
@@ -659,7 +689,7 @@ def run():
   screen = pygame.display.set_mode((width, height))
   
   player1 = Player(pos_x=100)
-  player2 = Player(pos_x=WIDTH - 100)
+  player2 = Player(pos_x=WIDTH - 100, skin='hat_red')
 
   ice = Ice()
 
