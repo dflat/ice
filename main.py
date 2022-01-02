@@ -362,8 +362,8 @@ class Player(pygame.sprite.Sprite):
                 continue
             Player.collisions[self] = hit
             hit.getting_hit = True
-            hit.vel += self.vel / 2
-            self.vel -= self.vel / 2 # todo.. testing
+            hit.vel += self.vel / 1
+            self.vel -= self.vel / 1 # todo.. testing
             print('got a hit', hit)
 
     def update(self, dt): ## player
