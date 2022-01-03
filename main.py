@@ -42,6 +42,20 @@ def load_obj_frames(w, h, color, obj_filename, double_size=0):
         frames.append(im)
     return frames
 
+def swap_palette(im, old_c, new_c):
+    surf = pygame.Surface(im.get_size())
+    surf.fill(new_c)
+    im.set_colorkey(old_c)
+    surf.blit(im, (0,0))
+    return surf
+def palette_swap(im, old_c, new_c):
+    x,y = im.get_size()
+    for i in range(x):
+        for j in range(y):
+            col = im.get_at((i,j))
+            if col == old_c:
+                im.set_at((i,j), new_c)
+
 class Explosion(pygame.sprite.Sprite):
     group = pygame.sprite.Group()
     frame_dupes = [3]*10
@@ -323,7 +337,9 @@ class Player(pygame.sprite.Sprite):
                 skin_im = pygame.image.load(os.path.join(
                                 IMAGE_PATH, f'{self.skin}.png')).convert_alpha()
                 im.blit(skin_im, (0,0))
-
+                palette_swap(im, (39,36,41), pygame.Color(200,0,255).lerp((39,36,41), .8))
+            # palette swap
+            palette_swap(im, (0,0,0), pygame.Color(0,0,0).lerp(BG_COLOR, .5))
             im = pygame.transform.scale2x(im)
             flipped = pygame.transform.flip(im,True,False)
             self.images[-1][phase] = im 
@@ -400,7 +416,7 @@ class Player(pygame.sprite.Sprite):
             self.acc += force 
 
         ## Apply gravity 
-        #self.acc[1] -= 30*dt
+        #self.acc[1] = -30
         #self.vel[1] += self.acc[1] * dt
         if self.jumping:
             self.vel[1] -= 3000*dt
