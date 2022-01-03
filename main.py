@@ -416,19 +416,25 @@ class Player(pygame.sprite.Sprite):
             self.acc += force 
 
         ## Apply gravity 
-        #self.acc[1] = -30
+        self.acc[1] = -3000 # assuming 1m = ~300px and gravity @ -10 m/s
+
         #self.vel[1] += self.acc[1] * dt
-        if self.jumping:
-            self.vel[1] -= 3000*dt
+        #if self.jumping:
+        #    self.vel[1] -= 3000*dt
+
+        self.vel[1] += self.acc[1] * dt
         self.vel[1] = max(-self.MAX_VEL, min(self.vel[1], self.MAX_VEL))
+        
         #print('y vel:', self.vel[1])
-        self.pos[1] -= self.vel[1] * dt 
+        self.pos[1] -= self.vel[1] * dt  # _subtract_ y pos due to flipped y-axis
+
         # TODO: fix this hack
         if self.vel[1] < 0 and self.pos[1] >= Ice.top - self.height/2 + 2:
             self.jumping = False
             print('stopped')
             self.vel[1] = 0
-        self.pos[1] = min(self.pos[1], Ice.top - self.height/2)
+
+        self.pos[1] = min(self.pos[1], Ice.top - self.height/2) # dont fall thru floor
 
         ## Update player physics
         self.vel[0] += self.acc[0] * dt
@@ -522,15 +528,17 @@ class Ice:
 class Sound:
     SOUNDS_PATH = os.path.join('assets','sound')
     order = ['ow','shit','fuck','balls','christ']
-    def __init__(self):
-        pygame.mixer.init()
-        pygame.mixer.set_num_channels(32)
+    pygame.mixer.init()
+    pygame.mixer.set_num_channels(32)
+
+    def __init__(self, asset_pack, is_environment=False):
         self._load_sounds()
         self.n_sounds = len(self.order)
         self.index = 0
         self.is_combo = False
         self.last_hit_time = 0
-        self._start_bg_noise()
+        if self.is_environment:
+            self._start_bg_noise()
 
     def _start_bg_noise(self):
         self.sounds['static'].play(loops=-1)
