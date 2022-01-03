@@ -219,12 +219,12 @@ class Drop(pygame.sprite.Sprite):
         self.rect.center = old_center
         self.phi = phi
 
-    def update(self, dt):
+    def update(self, dt): # Drop
         self.frame += 1
 
         # check if off-screen
         if self.pos[1] > HEIGHT + self.height:
-            sound.register_miss()
+            #self.sound.register_miss()
             return self.kill()
 
         # environmental forces
@@ -270,6 +270,9 @@ def assemble_image(surf, obj_filename, color_map):
     return surf
 
 class Player(pygame.sprite.Sprite):
+    player_no = 0
+    sound_packs = {1: ['penguin', 'guitar'], 2:['penguin', 'bass']}
+    SOUND_RESET_TIMEOUT = 2 # seconds to restart sound order
     collisions = { }
     group = set()
     n_phases = 12
@@ -281,6 +284,9 @@ class Player(pygame.sprite.Sprite):
                 }
     def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=None, skin=None):
         super().__init__()
+        Player.player_no += 1
+        self.sound = Sound(asset_packs = self.sound_packs[self.player_no],
+                            instrument = self.player_no)
         self.group.add(self) 
         self.width = width*2
         self.height = height*2
@@ -317,6 +323,7 @@ class Player(pygame.sprite.Sprite):
         self.phase = self.phases[0]
         self.getting_hit = False
         self.jumping = False
+        self.last_hit = 0
         self._connect_to_network()
 
     def _connect_to_network(self):
@@ -369,8 +376,12 @@ class Player(pygame.sprite.Sprite):
     def check_collisions(self):
         hit = pygame.sprite.spritecollideany(self, Drop.group)
         if hit:
+            t = time.time()
+            if t - self.last_hit > self.SOUND_RESET_TIMEOUT:
+                self.sound.register_miss()
             hit.kill()
-            sound.play_next()
+            self.sound.play_next()
+            self.last_hit = t
             Explosion(hit.pos + np.array([0,hit.height]))
              
 
@@ -463,10 +474,10 @@ class Player(pygame.sprite.Sprite):
         ## Control sounds and animations triggered by player state
         if self.phase != prev_phase:
             if self.phase == '5':
-                sound.start_looped('sliding')
+                self.sound.start_looped('sliding')
                 SnowPlume(self.pos, self)
             elif prev_phase == '5':
-                sound.stop_looped('sliding', fade_ms=200)
+                self.sound.stop_looped('sliding', fade_ms=200)
                 SnowPlume.deactivate(self) 
 
         ## Apply horizontal boundary conditions
@@ -526,18 +537,31 @@ class Ice:
         screen.blit(self.image, self.pos) 
 
 class Sound:
+    maj = [0,2,4,5,7,9,11]
+    maj = maj + [i+12 for i in maj]
+    low = 52
     SOUNDS_PATH = os.path.join('assets','sound')
-    order = ['ow','shit','fuck','balls','christ']
+    #order = ['ow','shit','fuck','balls','christ']
+    instruments = {1:'guitar', 2:'bass'}
+    note_orderings = {'guitar': [str(52+i) for i in maj],
+                    'bass':[str(52+i) for i in maj]}
     pygame.mixer.init()
     pygame.mixer.set_num_channels(32)
 
-    def __init__(self, asset_pack, is_environment=False):
+    # todo: dynamic sample triggering by song key, and bass follows guitar chord last
+    #       hit by player 1, for example...
+    def __init__(self, asset_packs, instrument=None, is_environment=False):
+        self.instrument = instrument
+        if instrument:
+            self.order = self.note_orderings[self.instruments[instrument]]
+            self.n_sounds = len(self.order)
+            print('sounds registery:', asset_packs, instrument)
+        self.asset_packs = asset_packs
         self._load_sounds()
-        self.n_sounds = len(self.order)
         self.index = 0
         self.is_combo = False
         self.last_hit_time = 0
-        if self.is_environment:
+        if is_environment:
             self._start_bg_noise()
 
     def _start_bg_noise(self):
@@ -547,18 +571,11 @@ class Sound:
     def _load_sounds(self):
         self.sounds = { }
         self.looping = { }
-        for path in os.scandir(os.path.join(self.SOUNDS_PATH, 'icicles')):
-            name = path.name.split('.')[0]
-            sound = pygame.mixer.Sound(path.path)
-            self.sounds[name] = sound
-        for path in os.scandir(os.path.join(self.SOUNDS_PATH, 'environment')):
-            name = path.name.split('.')[0]
-            sound = pygame.mixer.Sound(path.path)
-            self.sounds[name] = sound
-        for path in os.scandir(os.path.join(self.SOUNDS_PATH, 'penguin')):
-            name = path.name.split('.')[0]
-            sound = pygame.mixer.Sound(path.path)
-            self.sounds[name] = sound
+        for asset_pack in self.asset_packs:
+            for path in os.scandir(os.path.join(self.SOUNDS_PATH, asset_pack)):
+                name = path.name.split('.')[0]
+                sound = pygame.mixer.Sound(path.path)
+                self.sounds[name] = sound
 
     def register_miss(self):
         self.is_combo = False
@@ -578,8 +595,9 @@ class Sound:
         self.sounds[self.order[self.index]].play()
         self.index = (self.index + 1) % self.n_sounds
         self.is_combo = True
-sound = Sound()
-         
+
+environ_sound = Sound(asset_packs=['environment'], is_environment=True)
+
 
 class Wind:
     def __init__(self):
