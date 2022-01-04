@@ -270,10 +270,12 @@ def assemble_image(surf, obj_filename, color_map):
     return surf
 
 class Player(pygame.sprite.Sprite):
-    player_no = 0
+    players = 0
     sound_packs = {1: ['penguin', 'guitar'], 2:['penguin', 'bass']}
     SOUND_RESET_TIMEOUT = 2 # seconds to restart sound order
     collisions = { }
+    id_map = { }
+    collision_pairs = { }
     group = set()
     n_phases = 12
     phases = ['1','2','3','4'] + ['5']*(n_phases - 3)
@@ -284,9 +286,10 @@ class Player(pygame.sprite.Sprite):
                 }
     def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=None, skin=None):
         super().__init__()
-        Player.player_no += 1
-        self.sound = Sound(asset_packs = self.sound_packs[self.player_no],
-                            instrument = self.player_no)
+        self._register_new_player()
+
+        self.sound = Sound(asset_packs = self.sound_packs[self.player_id],
+                            instrument = self.player_id)
         self.group.add(self) 
         self.width = width*2
         self.height = height*2
@@ -298,7 +301,7 @@ class Player(pygame.sprite.Sprite):
         self._color = color
         self.color = color
 
-        self.n_ghost_frames = 5
+        self.n_ghost_frames = 2
         self._get_ghost_frames()
 
         self.pos = np.array([0,Ice.top - self.height/2], dtype=float)
@@ -312,7 +315,7 @@ class Player(pygame.sprite.Sprite):
         self.MAX_ACC = 1600*2
         self.left = False
         self.right = False
-        self.pos_history = deque(maxlen=self.n_ghost_frames)
+        self.pos_history = deque(maxlen=self.n_ghost_frames+30)
         self.packet_history = deque(maxlen=4)
         self.missed = 0
         self.x = 0
@@ -322,6 +325,7 @@ class Player(pygame.sprite.Sprite):
         self.direction = -1
         self.phase = self.phases[0]
         self.getting_hit = False
+        self.recoil_cooldown_frames = 0
         self.jumping = False
         self.last_hit = 0
         self._connect_to_network()
@@ -334,6 +338,18 @@ class Player(pygame.sprite.Sprite):
 
     def establish_link(self, client): # will be set by a thread in netcon class
         self.client = client
+
+    @classmethod
+    def _update_collision_graph(cls):
+        for pair in itertools.combinations(range(1, cls.players + 1), 2):
+            a, b = pair
+            cls.collision_pairs[Player.id_map[a]] = Player.id_map[b]
+
+    def _register_new_player(self):
+        Player.players += 1
+        self.player_id = Player.players
+        Player.id_map[self.player_id] = self
+        Player._update_collision_graph()
 
     def _init_images(self):
         self.images = defaultdict(dict)
@@ -351,6 +367,8 @@ class Player(pygame.sprite.Sprite):
             flipped = pygame.transform.flip(im,True,False)
             self.images[-1][phase] = im 
             self.images[1][phase] = flipped
+        self.hitbox = pygame.Surface(im.get_size())
+        self.hitbox.fill((255,0,0))
 
     def apply_force(self, force, name):
         self.environ_forces[name] += force
@@ -373,7 +391,7 @@ class Player(pygame.sprite.Sprite):
                 self.ghost_images[-1][phase].append(im)
                 self.ghost_images[1][phase].append(pygame.transform.flip(im,True,False)) 
 
-    def check_collisions(self):
+    def check_drop_collisions(self):
         hit = pygame.sprite.spritecollideany(self, Drop.group)
         if hit:
             t = time.time()
@@ -385,20 +403,71 @@ class Player(pygame.sprite.Sprite):
             Explosion(hit.pos + np.array([0,hit.height]))
              
 
+    def update_pos(self):
+        self.rect.x = self.pos[0]
+        self.rect.y = self.pos[1]
+
+    def check_next_pos(self):
+        pass
+
+    @classmethod
+    def check_for_collisions_between_players(cls, recoil_frames=6):
+        '''
+        Checks for collisions between unique pairs of players
+        '''
+        for a, b in cls.collision_pairs.items():
+            # check collide x
+            #a_old_pos = a.pos.copy()
+            #b_old_pos = b.pos.copy()
+            a_fut_pos = a.pos + a.vel*(1/60000)
+            b_fut_pos = b.pos + b.vel*(1/60000)
+            #a.update_pos() # todo:handle x and y separately
+            #b.update_pos()
+
+            # update rects and collide test, one component at a time
+            a.rect.x = a_fut_pos[0]
+            b.rect.x = b_fut_pos[0]
+            would_hit_x = pygame.sprite.collide_rect(a,b) 
+            if would_hit_x:
+                left, right = [p[-1] for p in sorted(((a.rect.x, 0, a), (b.rect.x, 1, b)))]
+                right.pos[0] = left.rect.right
+                right.rect.x = right.pos[0]
+
+            a.rect.y = a_fut_pos[1]
+            b.rect.y = b_fut_pos[1]
+            would_hit_y = pygame.sprite.collide_rect(a,b) 
+            if would_hit_y:
+                top, bot = [p[-1] for p in sorted(((a.rect.y, 0, a), (b.rect.y, 1, b)))]
+                top.pos[1] = bot.rect.top + top.height
+                top.rect.y = right.pos[1]
+
+            if would_hit_x or would_hit_y: 
+                # velocity transfer
+                a_vel = a.vel.copy()
+                a.vel = b.vel.copy() #/ 1
+                b.vel = a_vel #/ 1 # todo.. testing
+            
     def check_if_hit_other_players(self):
-        others = self.group - {self}
+        others = self.group - {self} #- set(Player.collisions) 
         hits = pygame.sprite.spritecollide(self, others, dokill=False)
-        for hit in hits:
-            if hit is self:
+        for other_player in hits:
+            if other_player.getting_hit: # hit player is already in a state of being hit
+                # why does this happen?
+                # a player is colling but has already collided in a
+                # previous frame and so _should_ be 'recoiling'
+                
+                #Player.collisions[hit] = self
+                #Player.collisions = { }#.pop(other_player)
                 continue
-            if hit.getting_hit:
-                Player.collisions[hit] = self
-                continue
-            Player.collisions[self] = hit
-            hit.getting_hit = True
-            hit.vel += self.vel / 1
-            self.vel -= self.vel / 1 # todo.. testing
-            print('got a hit', hit)
+
+            # record keeping
+            Player.collisions[self] = other_player
+            other_player.getting_hit = True
+
+            # velocity transfer
+            other_player.vel += self.vel #/ 1
+            self.vel -= self.vel #/ 1 # todo.. testing
+            print('%d hit %d' % (self.player_id, other_player.player_id))
 
     def update(self, dt): ## player
         self.dir = 1*self.right - 1*self.left
@@ -428,21 +497,14 @@ class Player(pygame.sprite.Sprite):
 
         ## Apply gravity 
         self.acc[1] = -3000 # assuming 1m = ~300px and gravity @ -10 m/s
-
-        #self.vel[1] += self.acc[1] * dt
-        #if self.jumping:
-        #    self.vel[1] -= 3000*dt
-
         self.vel[1] += self.acc[1] * dt
         self.vel[1] = max(-self.MAX_VEL, min(self.vel[1], self.MAX_VEL))
-        
-        #print('y vel:', self.vel[1])
         self.pos[1] -= self.vel[1] * dt  # _subtract_ y pos due to flipped y-axis
 
         # TODO: fix this hack
-        if self.vel[1] < 0 and self.pos[1] >= Ice.top - self.height/2 + 2:
+        if self.vel[1] < 0 and self.pos[1] >= Ice.top - self.height/2:# + 2:
             self.jumping = False
-            print('stopped')
+            #print('stopped')
             self.vel[1] = 0
 
         self.pos[1] = min(self.pos[1], Ice.top - self.height/2) # dont fall thru floor
@@ -471,6 +533,9 @@ class Player(pygame.sprite.Sprite):
 
         self.display_image = self.images[self.direction][self.phase]
 
+        if self.getting_hit:
+            self.display_image = self.hitbox
+
         ## Control sounds and animations triggered by player state
         if self.phase != prev_phase:
             if self.phase == '5':
@@ -489,17 +554,42 @@ class Player(pygame.sprite.Sprite):
         ## Record position history for ghosting effect
         self.pos_history.append(self.pos.copy())
 
-        ## Collision checks TODO: player v player check
-        self.check_collisions()
+        ## Collision checks
+        self.check_drop_collisions() 
+        #if self.player_id == 1:
+        #    self.check_if_hit_other_players()
+
+        if self.recoil_cooldown_frames > 0:
+            self.recoil_cooldown_frames -= 1
+
         if not any(Player.collisions):
             self.getting_hit = False
+        else:
+            print('colliding:', len(Player.collisions))
 
     def draw(self, screen):
+        # draw path trace trail
+        n = len(self.pos_history)-1
+        for i in range(n):
+            if 20 < self.pos_history[i][0] < WIDTH - 20:
+                pygame.draw.line(screen, pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
+                    self.pos_history[i] + self.center_offset,
+                    self.pos_history[i+1] + self.center_offset)
+
+        # draw ghost trail
         if self.frame > self.n_ghost_frames:
             for i in range(self.n_ghost_frames):
                 screen.blit(self.ghost_images[self.direction][self.phase][i],
-                                                self.pos_history[i])
+                                                self.pos_history[n-i])
+        # draw sprite
         screen.blit(self.display_image, self.pos)
+
+        # draw velocity vector representation
+        #pygame.draw.line(screen, (255,0,255), self.rect.center, 
+        #                            self.rect.center + 100*np.array([self.vel[0],
+        #                                        -self.vel[1]])/np.linalg.norm(self.vel),
+        #                                        width = 4)
+        #print('vel:', self.vel, 'pos:', self.pos)
 
 def vertical_gradient(size, startcolor, endcolor):
     """
@@ -593,6 +683,9 @@ class Sound:
 
     def play_next(self):
         self.sounds[self.order[self.index]].play()
+        perc = self.sounds.get('percussion')
+        if perc:
+            perc.play()
         self.index = (self.index + 1) % self.n_sounds
         self.is_combo = True
 
@@ -675,9 +768,10 @@ def update(dt): # game
           player.clear_force('wind')
 
       # collision check between players
-      player.check_if_hit_other_players()
+      #player.check_if_hit_other_players()
 
       player.update(dt)
+  Player.check_for_collisions_between_players()
       
  
   for drop in Drop.group:
@@ -728,7 +822,7 @@ def run():
   fpsClock = pygame.time.Clock()
   
   width, height = WIDTH, HEIGHT
-  screen = pygame.display.set_mode((width, height))
+  screen = pygame.display.set_mode((width, height), pygame.DOUBLEBUF, 32)
   
   player1 = Player(pos_x=100)
   player2 = Player(pos_x=WIDTH - 100, skin='hat_red')
