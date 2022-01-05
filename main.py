@@ -56,6 +56,7 @@ def palette_swap(im, old_c, new_c):
             if col == old_c:
                 im.set_at((i,j), new_c)
 
+
 class Explosion(pygame.sprite.Sprite):
     group = pygame.sprite.Group()
     frame_dupes = [3]*10
@@ -88,6 +89,12 @@ class Explosion(pygame.sprite.Sprite):
 
     def draw(self, screen):
         screen.blit(self.frames[self.frame_no], self.pos)
+
+class ProjectileExplosion(Explosion):
+    w = 16
+    h = 16
+    color = (200,70,100)
+    frames = load_obj_frames(w, h, color, 'explosion.obj', double_size=1)
 
 class SnowPlume(Explosion):
     w = 32
@@ -289,7 +296,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.offset = np.array((-8,-24))#-self.rect.x, -self.rect.y))
         self.pos_history = deque(maxlen=60)
-        self.gravity = 2000
+        self.gravity = 20*60
         self.speed = 30*60
         self.frame = 0
         self.fired = False
@@ -297,10 +304,15 @@ class Arrow(Drop): #pygame.sprite.Sprite):
     def update(self, dt):
         dt /= 1000
         if self.fired:
-            #self.vel[1] += self.gravity*dt
+            self.vel[1] += self.gravity*dt
             self.rect.x += self.vel[0]*dt
             self.rect.y += self.vel[1]*dt
-            self.pos_history.append(self.rect.center)
+            pos = self.rect.center #self.aim_center + self.rect.topleft + self.offset
+            #self.pos_history.append(self.rect.center)
+            self.pos_history.append(pos)
+            if pos[0] > WIDTH + 100 or pos[0] < -100:
+                self.kill()
+            self.collision_check()
         else:
             self.frame += 1
             r = self.inner_r
@@ -309,9 +321,18 @@ class Arrow(Drop): #pygame.sprite.Sprite):
             self.aim_vector = np.array([self.player.direction*math.cos(self.theta),
                                             math.sin(self.theta)])
             self.tip_offset = r*self.aim_vector
+            self.aim_center = self.ring_rect.center + np.array(self.tip_offset)
+            self.rect.center = self.aim_center #.copy() # testingh
             self.rotate(90*self.player.direction -
                     self.player.direction*self.theta*(180/math.pi))
+        
 
+    def collision_check(self):
+        for player in Player.group - {self.player}:
+            if player.rect.collidepoint(self.rect.center):
+                #player.take_damage()
+                self.kill()
+                ProjectileExplosion(self.rect.center)
 
     def fire(self):
         self.fired = True
@@ -328,7 +349,6 @@ class Arrow(Drop): #pygame.sprite.Sprite):
 
     def draw(self, screen):
         d = self.player.direction
-        c_offset = np.array(self.tip_offset) + self.rect.center
         ## Draw overlay
         if not self.fired:
             pygame.draw.arc(screen, self.color, self.ring_rect, d*-math.pi/2, d*math.pi/2)
@@ -336,21 +356,23 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                                 self.player.rect.center + self.tip_offset, 4)
 
         ## Draw projectile
-        screen.blit(self.image, np.array(self.ring_rect.center) +
-                    np.array(self.tip_offset) + self.rect.topleft + self.offset)
-        pygame.draw.circle(screen, (255,255,255),
-                self.ring_rect.center + self.tip_offset +
-                np.array(self.rect.center) + self.offset, 4)
+        #screen.blit(self.image, self.aim_center + self.rect.topleft + self.offset)
+        screen.blit(self.image, self.rect.topleft) # + self.offset)
+        pygame.draw.circle(screen, (255,255,255), self.aim_center, 4)
+                #self.ring_rect.center + self.tip_offset +
+                #np.array(self.rect.center) + self.offset, 4)
         self.draw_trace(screen)
 
     def draw_trace(self, screen):
+        offset = self.aim_center + self.offset
         n = len(self.pos_history)-1
         for i in range(n):
             if 20 < self.pos_history[i][0] < WIDTH - 20:
                 pygame.draw.line(screen,
                         pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
-                self.pos_history[i],
-                self.pos_history[i+1])
+                self.pos_history[i],# + self.offset,
+                self.pos_history[i+1])# + self.offset)
+            #print('pos history:', i, self.pos_history[i] + offset)
 
 def assemble_image(surf, obj_filename, color_map):
     path = os.path.join(OBJ_PATH, obj_filename)
