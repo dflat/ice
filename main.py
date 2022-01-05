@@ -282,10 +282,19 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.group.add(self) 
         self.player = player
         self.theta = 0
-        self.color = pygame.Color(255,255,255).lerp(BG_COLOR, .5)
+        self.color = pygame.Color(255,255,255).lerp(BG_COLOR, .5) # DUPE color attr
         self.inner_r = 80
         #self.outer_box = player.rect.inflate(0,0)
+
         self.ring_rect = pygame.Rect(player.rect.center, (self.inner_r*2, self.inner_r*2))
+        self.arch_rect = pygame.Rect(player.rect.center, (self.inner_r*2 + 10, self.inner_r*2))
+        
+        # Test initializing these attributes here to allow projectile
+        # to fire on first frame of existence, before a single update takes place
+        self.aim_vector = np.array([self.player.direction*math.cos(self.theta),
+                                            math.sin(self.theta)])
+        self.tip_offset = self.inner_r*self.aim_vector
+        self.aim_center = self.ring_rect.center + np.array(self.tip_offset)
 
         self.bullet_width = 16
         self.bullet_height = 48
@@ -294,6 +303,9 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.image0 = self._load_image(self.bullet_width, self.bullet_height, self.color)
         self.image = self.image0.copy()
         self.rect = self.image.get_rect()
+
+        self.rect.center = self.aim_center #.copy() # TEST
+
         self.offset = np.array((-8,-24))#-self.rect.x, -self.rect.y))
         self.pos_history = deque(maxlen=60)
         self.gravity = 20*60
@@ -310,13 +322,14 @@ class Arrow(Drop): #pygame.sprite.Sprite):
             pos = self.rect.center #self.aim_center + self.rect.topleft + self.offset
             #self.pos_history.append(self.rect.center)
             self.pos_history.append(pos)
-            if pos[0] > WIDTH + 100 or pos[0] < -100:
+            if pos[1] > HEIGHT + 100 or pos[0] > WIDTH + 100 or pos[0] < -100:
                 self.kill()
             self.collision_check()
         else:
             self.frame += 1
             r = self.inner_r
             self.ring_rect.center = self.player.rect.center
+            self.arch_rect.center = self.player.rect.center
             self.theta = rescale(self.player.dy,mn=-128,mx=127,a=-math.pi/2,b=math.pi/2)
             self.aim_vector = np.array([self.player.direction*math.cos(self.theta),
                                             math.sin(self.theta)])
@@ -352,6 +365,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         ## Draw overlay
         if not self.fired:
             pygame.draw.arc(screen, self.color, self.ring_rect, d*-math.pi/2, d*math.pi/2)
+            pygame.draw.arc(screen, self.color, self.arch_rect, d*-math.pi/2, d*math.pi/2)
             pygame.draw.circle(screen, (255,255,255),
                                 self.player.rect.center + self.tip_offset, 4)
 
@@ -444,6 +458,9 @@ class Player(pygame.sprite.Sprite):
         self.slow_mo_dur = 0
         self.last_hit = 0
         self.last_seq_no = 0
+        self.slowmo_enters = 0
+        self.slowmo_exits = 0
+        self.slowmo_triggers = 0
         self._connect_to_network()
 
     def _connect_to_network(self):
@@ -619,6 +636,7 @@ class Player(pygame.sprite.Sprite):
         ## Fetch network control data
         jump_pressed = False
         slow_mo_pressed = False
+        slow_mo_exit_pressed = False
         if self.client:
             record = self.client.get_record()  #self.netcon.get_record()
             if record:
@@ -633,19 +651,43 @@ class Player(pygame.sprite.Sprite):
                 self.x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
                 jump_pressed = record.jump_pressed()
                 slow_mo_pressed = record.slow_mo_pressed()
+                slow_mo_exit_pressed = record.slow_mo_exit_pressed()
                 self.dy = record.dy
-                print(record)
+                #print(record)
                 #print('dy', self.dy)
 
         # Only allow one player to slow down time at once
-        if slow_mo_pressed and (Player.active_slowmo is None
-                                or Player.active_slowmo is self):
-            ## Toggle slow-mo
-            game.slow_mo = not game.slow_mo
-            if game.slow_mo: # toggled on
+        stat = Player.active_slowmo.player_id if Player.active_slowmo else 'None'
+        msg = f'Slow Mo: {stat}, presses: {self.slowmo_triggers}, '\
+        f'enters: {self.slowmo_enters}, exits: {self.slowmo_exits}, '\
+        f'misfires: {self.slowmo_triggers-(self.slowmo_enters+self.slowmo_exits)}'
+        game.print(msg)
+
+        if slow_mo_pressed and slow_mo_exit_pressed:
+            # Too quick, cancel attempt if game is normal speed, 
+            # exit slowmo if already started
+            # If game is normal speed, this will work fine,
+            # resulting in a quick projectile fire.
+            #if game.slow_mo:
+            #    slow_mo_pressed = False  # only let the slow-mo exit go thru
+            # lets just see if this works
+            print('both slow-mo flags set in one network frame')
+
+        if slow_mo_pressed:
+            self.slowmo_triggers += 1
+            if not game.slow_mo and Player.active_slowmo is None:
+            # Only allow slow-mo if it's not engaged by any player
+                self.slowmo_enters += 1
+                game.slow_mo = True
                 Player.active_slowmo = self
                 self.arrow = Arrow(self)
-            else:
+
+        if slow_mo_exit_pressed:
+            self.slowmo_triggers += 1
+            if game.slow_mo and Player.active_slowmo is self:
+            # Only allow slow-mo exit if player is the one who triggered current slow-mo
+                self.slowmo_exits += 1
+                game.slow_mo = False
                 Player.active_slowmo = None
                 self.arrow.fire()
 
@@ -743,20 +785,25 @@ class Player(pygame.sprite.Sprite):
             print('colliding:', len(Player.collisions))
 
     def draw(self, screen):
-        # draw path trace trail
+        # draw path trace trail (snow clumps)
         n = len(self.pos_history)-1
-        if self.jumping:
+        r = 32 # random noise bound
+        if self.jumping and self.vel[1] > 0:
             for i in range(n):
                 if 20 < self.pos_history[i][0] < WIDTH - 20:
-                    pygame.draw.line(screen, pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
-                        self.pos_history[i] + self.center_offset,
-                        self.pos_history[i+1] + self.center_offset)
+                    pygame.draw.circle(screen, pygame.Color(255,255,255).lerp(
+                        BG_COLOR,(1-i/n)),
+                        self.pos_history[i] + self.center_offset +
+                        (random.randint(0,r) - r/2, random.randint(0,r) - r/2),
+                        random.randint(1,7), width=random.randint(0,2))
+                        #self.pos_history[i+1] + self.center_offset)
 
         # draw ghost trail
-        if self.frame > self.n_ghost_frames:
-            for i in range(self.n_ghost_frames):
+        ngf = self.n_ghost_frames
+        if self.frame > ngf:
+            for i in range(ngf):
                 screen.blit(self.ghost_images[self.direction][self.phase][i],
-                                                self.pos_history[n-i])
+                                                self.pos_history[n-ngf+i+1])
         # draw sprite
         screen.blit(self.display_image, self.pos)
 
@@ -910,7 +957,14 @@ def quit():
 
 class Game:
     def __init__(self):
+        pygame.init()
         self.slow_mo = False
+        font = pygame.font.get_default_font()
+        self.font = pygame.font.SysFont(font, 18)
+        self.print_surf = pygame.Surface((0,0))
+
+    def print(self, text):
+        self.print_surf = self.font.render(text, True, (255,255,255))
 
     def update(self, dt): # game
       for event in pygame.event.get():
@@ -989,10 +1043,11 @@ class Game:
       for expl in Explosion.group:
           expl.draw(screen)
 
+      ## Blit debug text
+      screen.blit(self.print_surf, (0,0))
       pygame.display.flip()
 
     def run(self):
-      pygame.init()
       fps = 60.0
       fpsClock = pygame.time.Clock()
       

@@ -4,6 +4,7 @@
 class ButtonState:
     JUMP = 0x01
     SLOWMO = 0x02
+    SLOWMO_EXIT = 0x04
 
 class Record:
     __slots__ = ('seq_no', 'roll', 'pitch', 'yaw', 'buttons', 'dy', 't')
@@ -23,6 +24,9 @@ class Record:
 
     def slow_mo_pressed(self):
         return True if self.buttons & ButtonState.SLOWMO else False
+
+    def slow_mo_exit_pressed(self):
+        return True if self.buttons & ButtonState.SLOWMO_EXIT else False
 
     def button_pressed(self, button):
         '''
