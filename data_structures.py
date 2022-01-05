@@ -3,20 +3,26 @@
 
 class ButtonState:
     JUMP = 0x01
+    SLOWMO = 0x02
 
 class Record:
-    __slots__ = ('roll', 'pitch', 'yaw', 'buttons', 't')
-    fmt = 'bbbb'
+    __slots__ = ('seq_no', 'roll', 'pitch', 'yaw', 'buttons', 'dy', 't')
+    fmt = 'Ibbbbb'
 
-    def __init__(self, roll, pitch, yaw, buttons=0x00, t=0):
+    def __init__(self, seq_no, roll, pitch, yaw, buttons=0x00, dy=0, t=0):
+        self.seq_no = seq_no
         self.roll = roll
         self.pitch = pitch
         self.yaw = yaw
         self.buttons = buttons
+        self.dy = dy
         self.t = t
 
     def jump_pressed(self):
         return True if self.buttons & ButtonState.JUMP else False
+
+    def slow_mo_pressed(self):
+        return True if self.buttons & ButtonState.SLOWMO else False
 
     def button_pressed(self, button):
         '''
@@ -26,6 +32,12 @@ class Record:
         return True if self.buttons & button else False
 
     def __repr__(self):
-        return f'Record({self.roll:.2f}, {self.pitch:.2f}, {self.yaw:.2f}'\
-                f', t={self.t})'
+        buttons_pressed = []
+        if self.jump_pressed():
+            buttons_pressed.append('jump')
+        if self.slow_mo_pressed():
+            buttons_pressed.append('slow-mo')
+        btns = ', '.join(buttons_pressed)
+        return f'Record(seq_no={self.seq_no}, roll={self.roll}, pitch={self.pitch}, '\
+               f'dy={self.dy}, buttons=[{btns}])'
 

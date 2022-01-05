@@ -164,14 +164,15 @@ class Drop(pygame.sprite.Sprite):
 
     _image_cache = { }
 
-    def __init__(self, x, y, height=48, width=16):
+    def __init__(self, x=0, y=0, height=48, width=16):
         super().__init__()
         self.group.add(self) 
         self.width = width
         self.height = height
         self._color = random.choice(self.COLORS)
         self.color = self._color
-        self._load_image(self.width, self.height, self.color)
+        self.image0 = self._load_image(self.width, self.height, self.color)
+        self.image = self.image0.copy()
         self.rect = self.image.get_rect()
 
         self.n_ghost_frames = 0
@@ -191,8 +192,8 @@ class Drop(pygame.sprite.Sprite):
     def _load_image(self, w, h, color):
         im = self._image_cache.get((w,h,tuple(color)))
         if not im: 
-            w, h = self.width/2, self.height/2
-            im = pygame.Surface((w,h), pygame.SRCALPHA, 32)
+            w, h = w/2, h/2
+            im = pygame.Surface((w,h), pygame.SRCALPHA, 32).convert_alpha()
             self.vertices = [(0, h/7), ((w-1)/3, 1), ((2/3)*(w-1),1),
                                 (w-1, h/8), ((w-1)/2, h-1)]
             pygame.draw.polygon(im, self.color, self.vertices)
@@ -201,8 +202,9 @@ class Drop(pygame.sprite.Sprite):
             pygame.draw.polygon(im, self.color.lerp((255,255,255), .25), shading_verts)
             im = pygame.transform.scale2x(im)
             self._image_cache[(w,h,tuple(color))] = im
-        self.image0 = im
-        self.image = im.copy()
+        return im
+        #self.image0 = im
+        #self.image = im.copy()
 
     def apply_force(self, force, name):
         self.environ_forces[name] += force
@@ -233,6 +235,9 @@ class Drop(pygame.sprite.Sprite):
 
         # physics simulation
         dt /= 1000
+        if game.slow_mo:
+            dt /= 10
+
         self.vel += self.acc*dt
         self.vel[0] *= .90 # horizontal air resistance
         self.pos += self.vel*dt
@@ -262,6 +267,91 @@ class Drop(pygame.sprite.Sprite):
             pygame.draw.polygon(im, self.ghost_colors[i], self.vertices)
             self.ghost_images.append(im)
 
+class Arrow(Drop): #pygame.sprite.Sprite):
+    group = pygame.sprite.Group()
+
+    def __init__(self, player):
+        super().__init__()
+        self.group.add(self) 
+        self.player = player
+        self.theta = 0
+        self.color = pygame.Color(255,255,255).lerp(BG_COLOR, .5)
+        self.inner_r = 80
+        #self.outer_box = player.rect.inflate(0,0)
+        self.ring_rect = pygame.Rect(player.rect.center, (self.inner_r*2, self.inner_r*2))
+
+        self.bullet_width = 16
+        self.bullet_height = 48
+        self._color = random.choice(self.COLORS)
+        self.color = self._color
+        self.image0 = self._load_image(self.bullet_width, self.bullet_height, self.color)
+        self.image = self.image0.copy()
+        self.rect = self.image.get_rect()
+        self.offset = np.array((-8,-24))#-self.rect.x, -self.rect.y))
+        self.pos_history = deque(maxlen=60)
+        self.gravity = 2000
+        self.speed = 30*60
+        self.frame = 0
+        self.fired = False
+
+    def update(self, dt):
+        dt /= 1000
+        if self.fired:
+            #self.vel[1] += self.gravity*dt
+            self.rect.x += self.vel[0]*dt
+            self.rect.y += self.vel[1]*dt
+            self.pos_history.append(self.rect.center)
+        else:
+            self.frame += 1
+            r = self.inner_r
+            self.ring_rect.center = self.player.rect.center
+            self.theta = rescale(self.player.dy,mn=-128,mx=127,a=-math.pi/2,b=math.pi/2)
+            self.aim_vector = np.array([self.player.direction*math.cos(self.theta),
+                                            math.sin(self.theta)])
+            self.tip_offset = r*self.aim_vector
+            self.rotate(90*self.player.direction -
+                    self.player.direction*self.theta*(180/math.pi))
+
+
+    def fire(self):
+        self.fired = True
+        self.vel = self.speed*self.aim_vector
+
+    def rotate(self, phi): # phi is in degrees
+        old_center = self.rect.center
+        new_image = pygame.transform.rotate(
+                                    self.image0, phi)
+        self.image = new_image
+        self.rect = self.image.get_rect()
+        self.rect.center = old_center
+        self.phi = phi
+
+    def draw(self, screen):
+        d = self.player.direction
+        c_offset = np.array(self.tip_offset) + self.rect.center
+        ## Draw overlay
+        if not self.fired:
+            pygame.draw.arc(screen, self.color, self.ring_rect, d*-math.pi/2, d*math.pi/2)
+            pygame.draw.circle(screen, (255,255,255),
+                                self.player.rect.center + self.tip_offset, 4)
+
+        ## Draw projectile
+        screen.blit(self.image, np.array(self.ring_rect.center) +
+                    np.array(self.tip_offset) + self.rect.topleft + self.offset)
+        pygame.draw.circle(screen, (255,255,255),
+                self.ring_rect.center + self.tip_offset +
+                np.array(self.rect.center) + self.offset, 4)
+        self.draw_trace(screen)
+
+    def draw_trace(self, screen):
+        n = len(self.pos_history)-1
+        for i in range(n):
+            if 20 < self.pos_history[i][0] < WIDTH - 20:
+                pygame.draw.line(screen,
+                        pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
+                self.pos_history[i],
+                self.pos_history[i+1])
+
 def assemble_image(surf, obj_filename, color_map):
     path = os.path.join(OBJ_PATH, obj_filename)
     parts = verts.parse_obj_as_dict(path)
@@ -271,11 +361,13 @@ def assemble_image(surf, obj_filename, color_map):
 
 class Player(pygame.sprite.Sprite):
     players = 0
+    dropped_packets = 0
     sound_packs = {1: ['penguin', 'guitar'], 2:['penguin', 'bass']}
     SOUND_RESET_TIMEOUT = 2 # seconds to restart sound order
     collisions = { }
     id_map = { }
     collision_pairs = { }
+    active_slowmo = None
     group = set()
     n_phases = 12
     phases = ['1','2','3','4'] + ['5']*(n_phases - 3)
@@ -315,7 +407,7 @@ class Player(pygame.sprite.Sprite):
         self.MAX_ACC = 1600*2
         self.left = False
         self.right = False
-        self.pos_history = deque(maxlen=self.n_ghost_frames+30)
+        self.pos_history = deque(maxlen=self.n_ghost_frames+10)
         self.packet_history = deque(maxlen=4)
         self.missed = 0
         self.x = 0
@@ -327,7 +419,9 @@ class Player(pygame.sprite.Sprite):
         self.getting_hit = False
         self.recoil_cooldown_frames = 0
         self.jumping = False
+        self.slow_mo_dur = 0
         self.last_hit = 0
+        self.last_seq_no = 0
         self._connect_to_network()
 
     def _connect_to_network(self):
@@ -416,36 +510,58 @@ class Player(pygame.sprite.Sprite):
         Checks for collisions between unique pairs of players
         '''
         for a, b in cls.collision_pairs.items():
-            # check collide x
-            #a_old_pos = a.pos.copy()
-            #b_old_pos = b.pos.copy()
             a_fut_pos = a.pos + a.vel*(1/60000)
             b_fut_pos = b.pos + b.vel*(1/60000)
-            #a.update_pos() # todo:handle x and y separately
-            #b.update_pos()
 
             # update rects and collide test, one component at a time
+
+            # test x collision
             a.rect.x = a_fut_pos[0]
             b.rect.x = b_fut_pos[0]
             would_hit_x = pygame.sprite.collide_rect(a,b) 
-            if would_hit_x:
-                left, right = [p[-1] for p in sorted(((a.rect.x, 0, a), (b.rect.x, 1, b)))]
-                right.pos[0] = left.rect.right
-                right.rect.x = right.pos[0]
 
+            # restore x component
+            a.rect.x = a.pos[0]
+            b.rect.x = b.pos[0]
+
+            # test y collision
             a.rect.y = a_fut_pos[1]
             b.rect.y = b_fut_pos[1]
             would_hit_y = pygame.sprite.collide_rect(a,b) 
-            if would_hit_y:
+
+            # restore y component
+            a.rect.x = a.pos[0]
+            b.rect.x = b.pos[0]
+
+            if would_hit_x:
+                left, right = [p[-1] for p in sorted(((a.rect.x, 0, a), (b.rect.x, 1, b)))]
+                #right.pos[0] = left.rect.right # old method, bias right
+                #right.rect.x = right.pos[0]    # old method bias right
+
+                # dis-intersect boxes along x-axis, evenly
+                overlap_x = left.rect.right - right.rect.left
+                right.pos[0] += overlap_x/2 + 1
+                left.pos[0] -= overlap_x/2 - 1
+
+                left.rect.x = left.pos[0]
+                right.rect.x = right.pos[0]
+
+
+            if would_hit_y and False:
                 top, bot = [p[-1] for p in sorted(((a.rect.y, 0, a), (b.rect.y, 1, b)))]
                 top.pos[1] = bot.rect.top + top.height
-                top.rect.y = right.pos[1]
+                top.rect.y = top.pos[1]
 
             if would_hit_x or would_hit_y: 
+                #print('hit axes (x,y) = (%d,%d)'%(would_hit_x,would_hit_y))
                 # velocity transfer
                 a_vel = a.vel.copy()
                 a.vel = b.vel.copy() #/ 1
                 b.vel = a_vel #/ 1 # todo.. testing
+                #for p in (a,b):
+                #    if p.jumping:
+                #        p.vel[1] += 500
+
             
     def check_if_hit_other_players(self):
         others = self.group - {self} #- set(Player.collisions) 
@@ -472,16 +588,54 @@ class Player(pygame.sprite.Sprite):
     def update(self, dt): ## player
         self.dir = 1*self.right - 1*self.left
         self.t += dt
+        dt_in_ms = dt
         self.frame += 1
         dt /= 1000
+        if game.slow_mo:
+            dt /= 10
 
         ## Fetch network control data
         jump_pressed = False
+        slow_mo_pressed = False
         if self.client:
             record = self.client.get_record()  #self.netcon.get_record()
             if record:
+                #assert(record.seq_no == self.last_seq_no + 1)
+                # TODO: give receipt confirmation and message redundancy in network layer
+                # until confirmed that record seq_no was received
+                if (record.seq_no != self.last_seq_no + 1):
+                    self.dropped_packets += 1
+                    rate = self.dropped_packets / record.seq_no
+                    print('DROPPED PACKET', self.last_seq_no + 1, f'DROP RATE:{rate:.3%}')
+                self.last_seq_no = record.seq_no
                 self.x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
                 jump_pressed = record.jump_pressed()
+                slow_mo_pressed = record.slow_mo_pressed()
+                self.dy = record.dy
+                print(record)
+                #print('dy', self.dy)
+
+        # Only allow one player to slow down time at once
+        if slow_mo_pressed and (Player.active_slowmo is None
+                                or Player.active_slowmo is self):
+            ## Toggle slow-mo
+            game.slow_mo = not game.slow_mo
+            if game.slow_mo: # toggled on
+                Player.active_slowmo = self
+                self.arrow = Arrow(self)
+            else:
+                Player.active_slowmo = None
+                self.arrow.fire()
+
+        # slow-mo timeout in case finish packet is dropped.. hack 'til fix network bug
+        #if Player.active_slowmo is self:
+        #    self.slow_mo_dur += dt_in_ms
+        #    if self.slow_mo_dur > 10000:
+        #        self.slow_mo_dur = 0
+        #        Player.active_slowmo = None
+        #        self.arrow.kill()
+        #        game.slow_mo = False
+        #        print('auto-timed out of slowmo')
 
         if jump_pressed and not self.jumping:
             print('jump pressed') 
@@ -497,6 +651,8 @@ class Player(pygame.sprite.Sprite):
 
         ## Apply gravity 
         self.acc[1] = -3000 # assuming 1m = ~300px and gravity @ -10 m/s
+
+
         self.vel[1] += self.acc[1] * dt
         self.vel[1] = max(-self.MAX_VEL, min(self.vel[1], self.MAX_VEL))
         self.pos[1] -= self.vel[1] * dt  # _subtract_ y pos due to flipped y-axis
@@ -514,11 +670,8 @@ class Player(pygame.sprite.Sprite):
         self.vel[0] *= self.friction
         self.vel[0] = max(-self.MAX_VEL, min(self.vel[0], self.MAX_VEL))
         self.pos[0] += self.vel[0] * dt
-        #print('acc: %.2f, vel: %.2f, pos: %.2f' % (self.acc[0], self.vel[0], self.pos[0]))
-        #self.pos[1] = Ice.top - self.height/2 # TODO make this dynamic
         self.rect.x = self.pos[0]
         self.rect.y = self.pos[1]
-        #self.pos -= self.center_offset
 
         ## Select the correct sprite image to display
         if self.acc[0] > 0:
@@ -570,11 +723,12 @@ class Player(pygame.sprite.Sprite):
     def draw(self, screen):
         # draw path trace trail
         n = len(self.pos_history)-1
-        for i in range(n):
-            if 20 < self.pos_history[i][0] < WIDTH - 20:
-                pygame.draw.line(screen, pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
-                    self.pos_history[i] + self.center_offset,
-                    self.pos_history[i+1] + self.center_offset)
+        if self.jumping:
+            for i in range(n):
+                if 20 < self.pos_history[i][0] < WIDTH - 20:
+                    pygame.draw.line(screen, pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
+                        self.pos_history[i] + self.center_offset,
+                        self.pos_history[i+1] + self.center_offset)
 
         # draw ghost trail
         if self.frame > self.n_ghost_frames:
@@ -718,7 +872,7 @@ class Wind:
 
     def chance(self):
         if random.randint(0,60*self.frequency) == 50:
-            print('starting wind')
+            #print('starting wind')
             self.start()
 wind = Wind()
 
@@ -732,80 +886,108 @@ def quit():
   pygame.quit() 
   sys.exit() # Not including this line crashes the script on Windows. Possibly
 
-def update(dt): # game
-  for event in pygame.event.get():
-    if event.type == QUIT:
-        quit()
-    if event.type == pygame.KEYDOWN:
-        if event.key == K_q:
+class Game:
+    def __init__(self):
+        self.slow_mo = False
+
+    def update(self, dt): # game
+      for event in pygame.event.get():
+        if event.type == QUIT:
             quit()
-        elif event.key == K_s:
-            #player1.left = True
-            pass
-        elif event.key == K_f:
-            #player1.right = True
-            pass
-    elif event.type == pygame.KEYUP:
-        if event.key == K_s:
-            #player1.left = False
-            pass
-        elif event.key == K_f:
-            #player1.right = False
-            pass
+        if event.type == pygame.KEYDOWN:
+            if event.key == K_q:
+                quit()
+            elif event.key == K_s:
+                #player1.left = True
+                pass
+            elif event.key == K_f:
+                #player1.right = True
+                pass
+        elif event.type == pygame.KEYUP:
+            if event.key == K_s:
+                self.slow_mo = True
+            elif event.key == K_f:
+                self.slow_mo = False
 
-  if len(Drop.group) < 10:
-      Drop(x=random.randint(16, WIDTH-16), y=random.randint(-500, -50))
+      if len(Drop.group) < 10:
+          Drop(x=random.randint(16, WIDTH-16), y=random.randint(-500, -50))
 
-  wind.update()
+      wind.update()
 
-  Player.collisions = { }
+      Player.collisions = { }
 
-  for player in Player.group:
-      # handle wind acceleration
-      if wind.blowing:
-          player.apply_force(wind.force*2, 'wind')
-      else:
-          player.clear_force('wind')
+      Player.check_for_collisions_between_players()
+      for player in Player.group:
+          # handle wind acceleration
+          if wind.blowing:
+              player.apply_force(wind.force*2, 'wind')
+          else:
+              player.clear_force('wind')
 
-      # collision check between players
-      #player.check_if_hit_other_players()
+          # collision check between players
+          #player.check_if_hit_other_players()
 
-      player.update(dt)
-  Player.check_for_collisions_between_players()
+          player.update(dt)
+      #Player.check_for_collisions_between_players()
+          
+     
+      for drop in Drop.group:
+          if wind.blowing:
+              drop.apply_force(wind.force*0.025, 'wind')
+              drop.rotate(drop.max_rotation*wind.direction*math.sin(
+                                    math.pi*wind.frame/wind.n_frames))
+          else:
+              drop.clear_force('wind')
+          drop.update(dt)
+
+      for arrow in Arrow.group:
+          arrow.update(dt)
+
+      for expl in Explosion.group:
+          expl.update(dt)
+
+    def draw(self, screen):
+      """
+      Draw things to the window. Called once per frame.
+      """
+      screen.fill(BG_COLOR) # Fill the screen with black.
+
+      for ice in Ice.group:
+          ice.draw(screen)
+
+      for player in Player.group:
+          player.draw(screen)
+
+      for drop in Drop.group:
+          drop.draw(screen)
+
+      for arrow in Arrow.group:
+          arrow.draw(screen)
+
+      for expl in Explosion.group:
+          expl.draw(screen)
+
+      pygame.display.flip()
+
+    def run(self):
+      pygame.init()
+      fps = 60.0
+      fpsClock = pygame.time.Clock()
       
- 
-  for drop in Drop.group:
-      if wind.blowing:
-          drop.apply_force(wind.force*0.025, 'wind')
-          drop.rotate(drop.max_rotation*wind.direction*math.sin(
-                                math.pi*wind.frame/wind.n_frames))
-      else:
-          drop.clear_force('wind')
-      drop.update(dt)
+      width, height = WIDTH, HEIGHT
+      screen = pygame.display.set_mode((width, height), pygame.DOUBLEBUF, 32)
+      
+      player1 = Player(pos_x=100)
+      player2 = Player(pos_x=WIDTH - 100, skin='hat_red')
 
-  for expl in Explosion.group:
-      expl.update(dt)
+      ice = Ice()
 
-def draw(screen):
-  """
-  Draw things to the window. Called once per frame.
-  """
-  screen.fill(BG_COLOR) # Fill the screen with black.
-
-  for ice in Ice.group:
-      ice.draw(screen)
-
-  for player in Player.group:
-      player.draw(screen)
-
-  for drop in Drop.group:
-      drop.draw(screen)
-
-  for expl in Explosion.group:
-      expl.draw(screen)
-
-  pygame.display.flip()
-
+      dt = 1/fps 
+      while True:
+        self.update(dt)
+        self.draw(screen)
+        dt = fpsClock.tick(fps)
+      #  print('fps:', fpsClock.get_fps())
 
 def rescale(x, mn=-math.pi/2, mx=math.pi/2, a=0, b=WIDTH):
     return a + ((x - mn)*(b-a)) / ( mx - mn)
@@ -816,24 +998,5 @@ def clamp(x, mn=-1, mx=1):
 netcon = network.NetworkConnection()
 netcon.listen()
 
-def run():
-  pygame.init()
-  fps = 60.0
-  fpsClock = pygame.time.Clock()
-  
-  width, height = WIDTH, HEIGHT
-  screen = pygame.display.set_mode((width, height), pygame.DOUBLEBUF, 32)
-  
-  player1 = Player(pos_x=100)
-  player2 = Player(pos_x=WIDTH - 100, skin='hat_red')
-
-  ice = Ice()
-
-  dt = 1/fps 
-  while True:
-    update(dt)
-    draw(screen)
-    dt = fpsClock.tick(fps)
-  #  print('fps:', fpsClock.get_fps())
-
-run()
+game = Game()
+game.run()

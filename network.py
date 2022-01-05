@@ -3,6 +3,7 @@ import threading
 import time
 import struct
 import queue
+from collections import defaultdict, deque
 from data_structures import Record
 
 class Client:
@@ -32,11 +33,9 @@ class NetworkConnection:
         self.port = 6018
         self.backlog = 5
         self.size = 512 
-        self.attitude = (0,0,0)
-        self.roll, self.pitch, self.yaw = (0,0,0)
+        # Store 10 seconds of packet history per client
+        self.record_history = defaultdict(lambda: deque(maxlen=60*10))
         self.last_t = time.time()
-        #self.record = Record(0,0,0,self.last_t)
-        self.q = queue.Queue()
 
     def parse_msg(self, msg):
         n_bytes = len(msg) 
@@ -55,6 +54,7 @@ class NetworkConnection:
             client = self.register_client(addr) 
 
         client.put(record)
+        self.record_history[addr].append(record)
         
     def listen(self):
         t = threading.Thread(target=self._serve)
@@ -72,7 +72,7 @@ class NetworkConnection:
                         player.establish_link(self.clients[addr])
                         print('linked to player', id(player))
                         return
-            print('attempting to link to player', id(player))
+            #print('attempting to link to player', id(player))
             time.sleep(1)
 
     def register_client(self, addr):
@@ -82,6 +82,7 @@ class NetworkConnection:
 
     def shutdown(self):
         self.remote.set()
+        #print(self.record_history)
 
     def greet(self, addr):
         self.s.sendto(b'hi', addr)
@@ -94,6 +95,9 @@ class NetworkConnection:
                 data, addr = self.s.recvfrom(self.size) 
                 if data == self.greeting:  # testing this here, in main game loop
                     self.greet(addr)
+                elif data == b'':
+                    # client disconnected
+                    continue
                 else:
                     for record in self.parse_msg(data):
                         #print(record)
