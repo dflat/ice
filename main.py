@@ -195,6 +195,8 @@ class Drop(pygame.sprite.Sprite):
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
         self.twinkle_freq = random.randint(60*1, 60*2)
         self.max_rotation = random.randint(10, 40)
+        self.type = 'regular'
+        self.mana = 1
 
     def _load_image(self, w, h, color):
         im = self._image_cache.get((w,h,tuple(color)))
@@ -304,7 +306,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.image = self.image0.copy()
         self.rect = self.image.get_rect()
 
-        self.rect.center = self.aim_center #.copy() # TEST
+        self.rect.center = self.aim_center#.copy() # TEST
 
         self.offset = np.array((-8,-24))#-self.rect.x, -self.rect.y))
         self.pos_history = deque(maxlen=60)
@@ -321,19 +323,24 @@ class Arrow(Drop): #pygame.sprite.Sprite):
     def update(self, dt):
         dt /= 1000
         if self.fired:
+            # integrate projectile motion
             self.vel[1] += self.gravity*dt
             self.rect.x += self.vel[0]*dt
             self.rect.y += self.vel[1]*dt
             self.pos += self.vel*dt
-            pos = self.rect.center #self.aim_center + self.rect.topleft + self.offset
-            print(f'dgrav:{self.gravity*dt:.4f}, rect.y:{self.rect.y}',
-                    f'self.pos_y={self.pos[1]:.2f}', end='\r')
-            #self.pos_history.append(self.rect.center)
+            self.update_pos()
+
+            # track projectile center for tail trace
+            pos = self.rect.center 
             self.pos_history.append(pos)
-            if pos[1] > HEIGHT + 100 or pos[0] > WIDTH + 100 or pos[0] < -100:
+            
+            # check boundary conditions
+            if pos[1] > HEIGHT + 300 or pos[0] > WIDTH + 300 or pos[0] < -300:
                 self.kill()
+
             self.collision_check()
-            # todo: rotate to velocity tangent, fix gravity in slowmo
+
+            # rotate to velocity tangent
             self.rotate(90 + np.angle(complex(*normalize(flip_y(self.vel))), deg=True))
 
         else:
@@ -346,7 +353,8 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                                             math.sin(self.theta)])
             self.tip_offset = r*self.aim_vector
             self.aim_center = self.ring_rect.center + np.array(self.tip_offset)
-            self.rect.center = self.aim_center #.copy() # testingh
+            self.rect.center = self.aim_center #.copy()
+            self.pos = self.aim_center.copy()
             self.rotate(90*self.player.direction -
                     self.player.direction*self.theta*(180/math.pi))
         
@@ -357,6 +365,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                 #player.take_damage()
                 self.kill()
                 ProjectileExplosion(self.rect.center)
+                sound_fx.play_congrats()
                 game.cam.start_shake()
 
     def fire(self):
@@ -393,7 +402,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         offset = self.aim_center + self.offset
         n = len(self.pos_history)-1
         for i in range(n):
-            if 20 < self.pos_history[i][0] < WIDTH - 20:
+            if True:#0 < self.pos_history[i][0] < WIDTH - 0:
                 pygame.draw.line(screen, pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
                                  self.pos_history[i], self.pos_history[i+1])
 
@@ -455,7 +464,7 @@ class Player(pygame.sprite.Sprite):
         self.pos_history = deque(maxlen=self.n_ghost_frames+10)
         self.packet_history = deque(maxlen=4)
         self.missed = 0
-        self.x = 0
+        self.acc_x = 0
         self.frame = 0
         self.friction = 0.99
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
@@ -470,6 +479,8 @@ class Player(pygame.sprite.Sprite):
         self.slowmo_enters = 0
         self.slowmo_exits = 0
         self.slowmo_triggers = 0
+        self.mana = 0
+        self.ammo = defaultdict(int)
         self._connect_to_network()
 
     def _connect_to_network(self):
@@ -543,8 +554,12 @@ class Player(pygame.sprite.Sprite):
             self.sound.play_next()
             self.last_hit = t
             Explosion(hit.pos + np.array([0,hit.height]))
-             
+            self.update_inventory(hit)
 
+    def update_inventory(self, drop):
+        self.mana += drop.mana
+        self.ammo[drop.type] += 1
+        
     def update_pos(self):
         self.rect.x = self.pos[0]
         self.rect.y = self.pos[1]
@@ -633,11 +648,11 @@ class Player(pygame.sprite.Sprite):
             self.vel -= self.vel #/ 1 # todo.. testing
             print('%d hit %d' % (self.player_id, other_player.player_id))
 
-    def update(self, dt): ## player
+    def update(self, dt): ## Player
         self.dir = 1*self.right - 1*self.left
+        self.frame += 1
         self.t += dt
         dt_in_ms = dt
-        self.frame += 1
         dt /= 1000
         if game.slow_mo:
             dt /= 10
@@ -657,13 +672,12 @@ class Player(pygame.sprite.Sprite):
                     rate = self.dropped_packets / record.seq_no
                     print('DROPPED PACKET', self.last_seq_no + 1, f'DROP RATE:{rate:.3%}')
                 self.last_seq_no = record.seq_no
-                self.x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
+                self.acc_x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
                 jump_pressed = record.jump_pressed()
                 slow_mo_pressed = record.slow_mo_pressed()
                 slow_mo_exit_pressed = record.slow_mo_exit_pressed()
                 self.dy = record.dy
                 #print(record)
-                #print('dy', self.dy)
 
         stat = Player.active_slowmo.player_id if Player.active_slowmo else 'None'
         msg = f'Slow Mo: {stat}, presses: {self.slowmo_triggers}, '\
@@ -680,7 +694,7 @@ class Player(pygame.sprite.Sprite):
             #if game.slow_mo:
             #    slow_mo_pressed = False  # only let the slow-mo exit go thru
             # lets just see if this works
-            print('both slow-mo flags set in one network frame')
+            print('player sent both slow-mo flags in one network frame')
 
         if slow_mo_pressed:
             self.slowmo_triggers += 1
@@ -690,6 +704,7 @@ class Player(pygame.sprite.Sprite):
                 game.slow_mo = True
                 Player.active_slowmo = self
                 self.arrow = Arrow(self)
+                self.slowmo_snd = sound_fx.start_fx('slowmo')
 
         if slow_mo_exit_pressed:
             self.slowmo_triggers += 1
@@ -699,6 +714,8 @@ class Player(pygame.sprite.Sprite):
                 game.slow_mo = False
                 Player.active_slowmo = None
                 self.arrow.fire()
+                sound_fx.stop_fx('slowmo', fade_ms=20)
+                sound_fx.start_fx('arrow')
 
         # slow-mo timeout in case finish packet is dropped.. hack 'til fix network bug
         #if Player.active_slowmo is self:
@@ -716,7 +733,7 @@ class Player(pygame.sprite.Sprite):
             self.jumping = True
 
         ## Set acceleration due to player input
-        self.acc[0] = self.x*self.MAX_ACC
+        self.acc[0] = self.acc_x*self.MAX_ACC
 
         ## Add environmental forces (e.g. wind)
         for force in self.environ_forces.values():
@@ -867,11 +884,14 @@ class Sound:
     maj = maj + [i+12 for i in maj]
     low = 52
     SOUNDS_PATH = os.path.join('assets','sound')
+    #EFFECTS_PATH = os.path.join(SOUNDS_PATH, 'effects')
     #order = ['ow','shit','fuck','balls','christ']
     instruments = {1:'guitar', 2:'bass'}
     note_orderings = {'guitar': [str(52+i) for i in maj],
                     'bass':[str(52+i) for i in maj]}
     pygame.mixer.init()
+    effects = {'arrow':'laser_gun', 'slowmo':'enter_slowmo_airy'}
+    congrats = ['nice_robo', 'golden_robo',]
     pygame.mixer.set_num_channels(32)
 
     # todo: dynamic sample triggering by song key, and bass follows guitar chord last
@@ -897,9 +917,11 @@ class Sound:
     def _load_sounds(self):
         self.sounds = { }
         self.looping = { }
+        self.one_shots = { }
         for asset_pack in self.asset_packs:
             for path in os.scandir(os.path.join(self.SOUNDS_PATH, asset_pack)):
                 name = path.name.split('.')[0]
+                assert(name not in self.sounds) # no accidental over-riding
                 sound = pygame.mixer.Sound(path.path)
                 self.sounds[name] = sound
 
@@ -917,6 +939,34 @@ class Sound:
         if snd:
             snd.fadeout(fade_ms)
 
+    def start_fx(self, name):
+        return self.start_one_shot(self.effects[name])
+
+    def stop_fx(self, name, fade_ms=0):
+        self.stop_one_shot(self.effects[name], fade_ms)
+
+    def stop_sound(self, snd, fade_ms=0):
+        """
+        Use this to stop sounds, user sends playing sound back in.
+        """
+        snd.fadeout(fade_ms)
+
+    def play_congrats(self):
+        name = random.choice(self.congrats)
+        self.start_one_shot(name)
+
+    def start_one_shot(self, name):
+        snd = self.sounds[name]
+        snd.play()
+        self.one_shots[name] = snd
+        return snd
+
+    def stop_one_shot(self, name, fade_ms=0):
+        snd = self.one_shots.get(name)
+        if snd:
+            snd.fadeout(fade_ms)
+        return snd
+
     def play_next(self):
         self.sounds[self.order[self.index]].play()
         perc = self.sounds.get('percussion')
@@ -926,6 +976,7 @@ class Sound:
         self.is_combo = True
 
 environ_sound = Sound(asset_packs=['environment'], is_environment=True)
+sound_fx = Sound(asset_packs=['effects'], is_environment=False)
 
 
 class Wind:
