@@ -72,7 +72,7 @@ class NetworkConnection:
                         player.establish_link(self.clients[addr])
                         print('linked to player', id(player))
                         return
-            #print('attempting to link to player', id(player))
+            print('attempting to link to player', id(player))
             time.sleep(1)
 
     def register_client(self, addr):

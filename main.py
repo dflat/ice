@@ -182,7 +182,7 @@ class Drop(pygame.sprite.Sprite):
         self.image = self.image0.copy()
         self.rect = self.image.get_rect()
 
-        self.n_ghost_frames = 0
+        self.n_ghost_frames = 0 #TODO bug with ghost frames
         self._get_ghost_frames()
         self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
         self.pos = np.array([x,y], dtype=float)
@@ -262,7 +262,7 @@ class Drop(pygame.sprite.Sprite):
         if self.frame > self.n_ghost_frames:
             for i in range(self.n_ghost_frames):
                 screen.blit(self.ghost_images[i], self.pos_history[i])
-        screen.blit(self.image, self.pos)
+        screen.blit(self.image, self.pos + game.cam.pos)
 
     def _get_ghost_frames(self):
         n = self.n_ghost_frames
@@ -310,8 +310,13 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.pos_history = deque(maxlen=60)
         self.gravity = 20*60
         self.speed = 30*60
+        self.pos = np.array(self.rect.center, dtype='float') # testing...
         self.frame = 0
         self.fired = False
+
+    def update_pos(self):
+        self.rect.x = self.pos[0]
+        self.rect.y = self.pos[1]
 
     def update(self, dt):
         dt /= 1000
@@ -319,12 +324,18 @@ class Arrow(Drop): #pygame.sprite.Sprite):
             self.vel[1] += self.gravity*dt
             self.rect.x += self.vel[0]*dt
             self.rect.y += self.vel[1]*dt
+            self.pos += self.vel*dt
             pos = self.rect.center #self.aim_center + self.rect.topleft + self.offset
+            print(f'dgrav:{self.gravity*dt:.4f}, rect.y:{self.rect.y}',
+                    f'self.pos_y={self.pos[1]:.2f}', end='\r')
             #self.pos_history.append(self.rect.center)
             self.pos_history.append(pos)
             if pos[1] > HEIGHT + 100 or pos[0] > WIDTH + 100 or pos[0] < -100:
                 self.kill()
             self.collision_check()
+            # todo: rotate to velocity tangent, fix gravity in slowmo
+            self.rotate(90 + np.angle(complex(*normalize(flip_y(self.vel))), deg=True))
+
         else:
             self.frame += 1
             r = self.inner_r
@@ -346,6 +357,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                 #player.take_damage()
                 self.kill()
                 ProjectileExplosion(self.rect.center)
+                game.cam.start_shake()
 
     def fire(self):
         self.fired = True
@@ -362,19 +374,19 @@ class Arrow(Drop): #pygame.sprite.Sprite):
 
     def draw(self, screen):
         d = self.player.direction
+
         ## Draw overlay
         if not self.fired:
-            pygame.draw.arc(screen, self.color, self.ring_rect, d*-math.pi/2, d*math.pi/2)
-            pygame.draw.arc(screen, self.color, self.arch_rect, d*-math.pi/2, d*math.pi/2)
+            pygame.draw.arc(screen, self.color, self.ring_rect, d*-math.pi/2, d*math.pi/2,
+                        width = random.randint(1,3))
+            pygame.draw.arc(screen, self.color, self.arch_rect, d*-math.pi/2, d*math.pi/2,
+                        width = random.randint(1,3))
             pygame.draw.circle(screen, (255,255,255),
                                 self.player.rect.center + self.tip_offset, 4)
 
         ## Draw projectile
-        #screen.blit(self.image, self.aim_center + self.rect.topleft + self.offset)
-        screen.blit(self.image, self.rect.topleft) # + self.offset)
+        screen.blit(self.image, self.rect.topleft) 
         pygame.draw.circle(screen, (255,255,255), self.aim_center, 4)
-                #self.ring_rect.center + self.tip_offset +
-                #np.array(self.rect.center) + self.offset, 4)
         self.draw_trace(screen)
 
     def draw_trace(self, screen):
@@ -382,11 +394,8 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         n = len(self.pos_history)-1
         for i in range(n):
             if 20 < self.pos_history[i][0] < WIDTH - 20:
-                pygame.draw.line(screen,
-                        pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
-                self.pos_history[i],# + self.offset,
-                self.pos_history[i+1])# + self.offset)
-            #print('pos history:', i, self.pos_history[i] + offset)
+                pygame.draw.line(screen, pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
+                                 self.pos_history[i], self.pos_history[i+1])
 
 def assemble_image(surf, obj_filename, color_map):
     path = os.path.join(OBJ_PATH, obj_filename)
@@ -656,13 +665,13 @@ class Player(pygame.sprite.Sprite):
                 #print(record)
                 #print('dy', self.dy)
 
-        # Only allow one player to slow down time at once
         stat = Player.active_slowmo.player_id if Player.active_slowmo else 'None'
         msg = f'Slow Mo: {stat}, presses: {self.slowmo_triggers}, '\
         f'enters: {self.slowmo_enters}, exits: {self.slowmo_exits}, '\
         f'misfires: {self.slowmo_triggers-(self.slowmo_enters+self.slowmo_exits)}'
-        game.print(msg)
+        game.print(msg, self.player_id)
 
+        ## Only allow one player to slow down time at once
         if slow_mo_pressed and slow_mo_exit_pressed:
             # Too quick, cancel attempt if game is normal speed, 
             # exit slowmo if already started
@@ -762,6 +771,9 @@ class Player(pygame.sprite.Sprite):
                 self.sound.stop_looped('sliding', fade_ms=200)
                 SnowPlume.deactivate(self) 
 
+        ## Camera processing
+        #self.pos += game.cam.pos
+
         ## Apply horizontal boundary conditions
         if self.pos[0] > WIDTH:
             self.pos[0] = -self.width #640 - self.center_offset[0]
@@ -784,18 +796,19 @@ class Player(pygame.sprite.Sprite):
         else:
             print('colliding:', len(Player.collisions))
 
+
     def draw(self, screen):
         # draw path trace trail (snow clumps)
         n = len(self.pos_history)-1
         r = 32 # random noise bound
-        if self.jumping and self.vel[1] > 0:
+        if self.jumping and self.vel[1] > self.MAX_VEL / 4:# or self.vel[0]==self.MAX_VEL:
             for i in range(n):
-                if 20 < self.pos_history[i][0] < WIDTH - 20:
+                if 20 < self.pos_history[i][0] < WIDTH - 20 and random.randint(0,1)==1:
                     pygame.draw.circle(screen, pygame.Color(255,255,255).lerp(
                         BG_COLOR,(1-i/n)),
                         self.pos_history[i] + self.center_offset +
                         (random.randint(0,r) - r/2, random.randint(0,r) - r/2),
-                        random.randint(1,7), width=random.randint(0,2))
+                        random.randint(1,7), width=0)#random.randint(0,1))
                         #self.pos_history[i+1] + self.center_offset)
 
         # draw ghost trail
@@ -805,7 +818,7 @@ class Player(pygame.sprite.Sprite):
                 screen.blit(self.ghost_images[self.direction][self.phase][i],
                                                 self.pos_history[n-ngf+i+1])
         # draw sprite
-        screen.blit(self.display_image, self.pos)
+        screen.blit(self.display_image, self.pos + game.cam.pos)
 
         # draw velocity vector representation
         #pygame.draw.line(screen, (255,0,255), self.rect.center, 
@@ -843,11 +856,11 @@ class Ice:
     def __init__(self):
         self.group.add(self)
         self.color = pygame.Color(232,238,252,255)
-        self.image = vertical_gradient((WIDTH,80), BG_COLOR+(255,), self.color)
-        self.pos = np.array([0,self.top])
+        self.image = vertical_gradient((WIDTH+100,80 +20), BG_COLOR+(255,), self.color)
+        self.pos = np.array([-50,self.top])
         self.rect = self.image.get_rect()
     def draw(self, screen):
-        screen.blit(self.image, self.pos) 
+        screen.blit(self.image, self.pos + game.cam.pos) 
 
 class Sound:
     maj = [0,2,4,5,7,9,11]
@@ -955,18 +968,64 @@ def quit():
   pygame.quit() 
   sys.exit() # Not including this line crashes the script on Windows. Possibly
 
+class Camera:
+    def __init__(self, game):
+        self.game = game
+        self.pos = np.array((0,0))
+        self.dolly = np.array((0,0))
+        self.offset = np.array((0,0))
+        self.impact = False
+
+    def reset(self):
+        self.pos = np.array((0,0))
+        self.offset = np.array((0,0))
+
+    def shake(self):
+        amount = self.shake_amount
+        self.offset[0] = random.randint(0,amount) - amount/2
+        self.offset[1] = random.randint(0,amount) - amount/2
+
+    def start_shake(self, frames=20, amount=8):
+        self.impact = True
+        self.impact_frames = frames
+        self.shake_amount = amount
+
+    def clear_shake(self):
+        self.impact = False
+        self.offset = np.array((0,0))
+
+    def update(self, dt):
+        if self.impact:
+            if self.impact_frames > 0:
+                self.shake()
+                self.impact_frames -= 1
+                # todo: maybe taper the shake amount every frame
+            else:
+                self.clear_shake()
+
+        self.pos = self.dolly + self.offset # dont mutate pos with offset TODO
+
 class Game:
+    DEBUG_ROW_HEIGHT = 20
+
     def __init__(self):
         pygame.init()
         self.slow_mo = False
+        self.slow_mo_rate = 10
+        self.display_dt = 0
+        self.cam = Camera(self)
         font = pygame.font.get_default_font()
         self.font = pygame.font.SysFont(font, 18)
-        self.print_surf = pygame.Surface((0,0))
+        self.debug_surfs = {1: pygame.Surface((0,0)), 2: pygame.Surface((0,0))}
 
-    def print(self, text):
-        self.print_surf = self.font.render(text, True, (255,255,255))
+    def print(self, text, row):
+        self.debug_surfs[row] = self.font.render(text, True, (255,255,255))
 
     def update(self, dt): # game
+      """
+      Game update phase.
+      """
+      ## Events
       for event in pygame.event.get():
         if event.type == QUIT:
             quit()
@@ -985,8 +1044,15 @@ class Game:
             elif event.key == K_f:
                 self.slow_mo = False
 
+      ## Update 
+      self.display_dt = dt
+      if self.slow_mo:
+          self.display_dt = dt / 10
+
       if len(Drop.group) < 10:
           Drop(x=random.randint(16, WIDTH-16), y=random.randint(-500, -50))
+
+      self.cam.update(dt)
 
       wind.update()
 
@@ -1017,14 +1083,15 @@ class Game:
           drop.update(dt)
 
       for arrow in Arrow.group:
-          arrow.update(dt)
+          arrow.update(self.display_dt)
+          #arrow.update(dt)
 
       for expl in Explosion.group:
           expl.update(dt)
 
     def draw(self, screen):
       """
-      Draw things to the window. Called once per frame.
+      Game draw phase.
       """
       screen.fill(BG_COLOR) # Fill the screen with black.
 
@@ -1043,9 +1110,12 @@ class Game:
       for expl in Explosion.group:
           expl.draw(screen)
 
-      ## Blit debug text
-      screen.blit(self.print_surf, (0,0))
+      self.draw_debug_info(screen) 
       pygame.display.flip()
+
+    def draw_debug_info(self, screen):
+        for row, surf in self.debug_surfs.items():
+            screen.blit(surf, (0, (row-1)*self.DEBUG_ROW_HEIGHT))
 
     def run(self):
       fps = 60.0
@@ -1065,6 +1135,15 @@ class Game:
         self.draw(screen)
         dt = fpsClock.tick(fps)
       #  print('fps:', fpsClock.get_fps())
+
+def normalize(v):
+    norm = np.linalg.norm(v)
+    if norm == 0:
+        return v
+    return v / norm
+
+def flip_y(v):
+    return np.array((v[0], -v[1]))
 
 def rescale(x, mn=-math.pi/2, mx=math.pi/2, a=0, b=WIDTH):
     return a + ((x - mn)*(b-a)) / ( mx - mn)
