@@ -278,13 +278,14 @@ class Drop(pygame.sprite.Sprite):
 
 class Arrow(Drop): #pygame.sprite.Sprite):
     group = pygame.sprite.Group()
+    power = 5
 
     def __init__(self, player):
         super().__init__()
         self.group.add(self) 
         self.player = player
         self.theta = 0
-        self.color = pygame.Color(255,255,255).lerp(BG_COLOR, .5) # DUPE color attr
+        #self.color = pygame.Color(255,255,255).lerp(BG_COLOR, .5) # DUPE color attr
         self.inner_r = 80
         #self.outer_box = player.rect.inflate(0,0)
 
@@ -315,14 +316,17 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.pos = np.array(self.rect.center, dtype='float') # testing...
         self.frame = 0
         self.fired = False
+        self.time_since_fired = 0
 
     def update_pos(self):
         self.rect.x = self.pos[0]
         self.rect.y = self.pos[1]
 
-    def update(self, dt):
+    def update(self, dt): # Arrow
         dt /= 1000
         if self.fired:
+            self.time_since_fired += dt
+
             # integrate projectile motion
             self.vel[1] += self.gravity*dt
             self.rect.x += self.vel[0]*dt
@@ -338,7 +342,8 @@ class Arrow(Drop): #pygame.sprite.Sprite):
             if pos[1] > HEIGHT + 300 or pos[0] > WIDTH + 300 or pos[0] < -300:
                 self.kill()
 
-            self.collision_check()
+            self.collision_with_players_check()
+            self.collision_with_other_arrows_check()
 
             # rotate to velocity tangent
             self.rotate(90 + np.angle(complex(*normalize(flip_y(self.vel))), deg=True))
@@ -355,18 +360,57 @@ class Arrow(Drop): #pygame.sprite.Sprite):
             self.aim_center = self.ring_rect.center + np.array(self.tip_offset)
             self.rect.center = self.aim_center #.copy()
             self.pos = self.aim_center.copy()
-            self.rotate(90*self.player.direction -
-                    self.player.direction*self.theta*(180/math.pi))
+            self.rotate(90*self.player.direction
+                        - self.player.direction*self.theta*(180/math.pi))
         
-
-    def collision_check(self):
+    def collision_with_players_check(self):
         for player in Player.group - {self.player}:
             if player.rect.collidepoint(self.rect.center):
                 #player.take_damage()
+
+                #  Transfer velocity to hit player. If the shot is fired
+                #  from above, give the hit player a recoil kick up. 
+                arrow_v, power = self.vel, self.power
+                print('power:', power)
+                player.vel[0] += arrow_v[0]*power
+                y_vel = arrow_v[1]*power if arrow_v[1] > 0 else -arrow_v[1]*power
+                player.vel[1] += y_vel 
+
+                ## Remove arrow sprite, animate hit
                 self.kill()
                 ProjectileExplosion(self.rect.center)
                 sound_fx.play_congrats()
                 game.cam.start_shake()
+    
+    def collision_with_other_arrows_check(self):
+        player_who_fired = self.player
+        enemy_arrows = {a for a in Arrow.group if a.player != player_who_fired}
+        for arrow in enemy_arrows:
+            # Do crude bounding box check
+            if arrow.rect.colliderect(self.rect):
+                ## todo: or skip masks and just do a circle intersection
+                print('arrows AABB intersect')
+                # Do pixel perfect check, use a mask
+                mask = pygame.mask.from_surface(self.image)
+                other = pygame.mask.from_surface(arrow.image)
+                offset = (arrow.rect.x - self.rect.x, arrow.rect.y - self.rect.y)
+                intersection = mask.overlap(other, offset=offset)
+                if intersection:
+                    print('arrows intersect')
+                    sound_fx.start_fx('intercepted')
+                    arrow.kill()
+                    self.kill()
+                    ProjectileExplosion(self.pos+intersection)
+                    # Award points to whoever fired second,
+                    # as they got the 'interception'; If the player
+                    # is loaded but hasn't fired, that counts as
+                    # 'firing second'.
+                    if self.time_since_fired < arrow.time_since_fired:
+                        self.player.intercepted_arrow()
+                    else:
+                        arrow.player.intercepted_arrow()
+
+
 
     def fire(self):
         self.fired = True
@@ -413,6 +457,74 @@ def assemble_image(surf, obj_filename, color_map):
         pygame.draw.polygon(surf, color_map[key], parts[key][0])
     return surf
 
+class PlayerBubble(pygame.sprite.Sprite):
+    group = pygame.sprite.Group()
+    w = 72
+    h = 72
+    resolutions = 20
+    #_colors = {1: (255,0,0), 2: (0,0,255)}
+    #player_images = { }
+
+    def __init__(self, player):
+        super().__init__()
+        self.group.add(self)
+        self.player = player
+        self.pos = np.array((player.rect.x, 0))
+        #self.image = self.player_images[player.player_id]
+        self._gen_image()
+        #self.rect = self.image.get_rect()
+        self.visible = False
+
+    #def update_pos(self):
+        #self.rect.topleft = self.pos
+
+    def _gen_image(self):
+        pad = 10
+        w, h = self.w + 2*pad, self.h + 2*pad
+        center = (w/2, h/2)
+        color = (220,220,220)#pygame.Color(BG_COLOR).lerp(Player.colors[self.player.player_id], .8)
+        inner_color = BG_COLOR
+        tip_points = [(w/2,0), (w/2 - w/8, h/4), (w/2 + w/8, h/4)]
+        aspect = self.player.width / self.player.height
+        thumbnail = pygame.transform.scale(self.player.image,
+                    (self.player.width/2, self.player.height/2))
+        thumb_w, thumb_h = thumbnail.get_size()
+        image = pygame.Surface((w, h)).convert_alpha()
+        pygame.draw.circle(image, color, center, self.w/2) # outer circle
+        pygame.draw.polygon(image, color, tip_points)      # triangle tip
+        pygame.draw.circle(image, inner_color, center, self.w/2 - 4) # inner circle
+        image.set_alpha(200)
+        self.images = []
+        for i in range(self.resolutions):
+            res_h = thumb_h - i
+            res_w = res_h*aspect 
+            im = image.copy()
+            thumb_im = pygame.transform.scale(thumbnail, (res_w, res_h))
+            tw, th = thumb_im.get_size()
+            im.blit(thumb_im, (center[0] - tw/2, center[1] - th/2))
+            self.images.append(im)
+
+        #self.player_images[player_id] = image
+        #self.image0 = image
+        #self.image = image.copy()
+        
+    def update(self, dt):
+        if self.player.rect.bottom > 0:
+            self.visible = False
+        else:
+            self.visible = True
+            self.pos[0] = self.player.rect.x
+            dist_above_top = -self.player.rect.bottom
+            mx_index = self.resolutions - 1
+            index = int(rescale(dist_above_top, mn=1, mx=200, a=0, b=mx_index))
+            self.image = self.images[9]#clamp(index, mn=0, mx=mx_index)]
+            print('dist above:', dist_above_top, 'i:', index)
+
+    def draw(self, screen):
+        if self.visible:
+            screen.blit(self.image, self.pos)
+
+
 class Player(pygame.sprite.Sprite):
     players = 0
     dropped_packets = 0
@@ -426,16 +538,19 @@ class Player(pygame.sprite.Sprite):
     n_phases = 12
     phases = ['1','2','3','4'] + ['5']*(n_phases - 3)
     phase_map = dict(zip(range(len(phases)), phases))
-    color_map = {'base':pygame.Color(0,0,0), 'belly':pygame.Color(240,240,240),
-                'feet':pygame.Color(235,191,73), 'beak': pygame.Color(235,191,73),
-                'eyeball':pygame.Color(255,255,255)
-                }
+    colors = {1: pygame.Color(39,36,41),
+              2: pygame.Color(200,0,255).lerp((39,36,41), .8),
+    }
+
+    # defunct
+    #color_map = {'base':pygame.Color(0,0,0), 'belly':pygame.Color(240,240,240),
+    #            'feet':pygame.Color(235,191,73), 'beak': pygame.Color(235,191,73),
+    #            'eyeball':pygame.Color(255,255,255)
+    #            }
+
     def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=None, skin=None):
         super().__init__()
-        self._register_new_player()
-
-        self.sound = Sound(asset_packs = self.sound_packs[self.player_id],
-                            instrument = self.player_id)
+        #self._register_new_player()
         self.group.add(self) 
         self.width = width*2
         self.height = height*2
@@ -481,6 +596,8 @@ class Player(pygame.sprite.Sprite):
         self.slowmo_triggers = 0
         self.mana = 0
         self.ammo = defaultdict(int)
+
+        self._register_new_player()
         self._connect_to_network()
 
     def _connect_to_network(self):
@@ -503,6 +620,9 @@ class Player(pygame.sprite.Sprite):
         self.player_id = Player.players
         Player.id_map[self.player_id] = self
         Player._update_collision_graph()
+        PlayerBubble(self)
+        self.sound = Sound(asset_packs = self.sound_packs[self.player_id],
+                            instrument = self.player_id)
 
     def _init_images(self):
         self.images = defaultdict(dict)
@@ -555,6 +675,10 @@ class Player(pygame.sprite.Sprite):
             self.last_hit = t
             Explosion(hit.pos + np.array([0,hit.height]))
             self.update_inventory(hit)
+
+    def intercepted_arrow(self):
+        print(f'Player {self.player_id} intercepted an arrow.')
+        self.mana += 3
 
     def update_inventory(self, drop):
         self.mana += drop.mana
@@ -890,7 +1014,8 @@ class Sound:
     note_orderings = {'guitar': [str(52+i) for i in maj],
                     'bass':[str(52+i) for i in maj]}
     pygame.mixer.init()
-    effects = {'arrow':'laser_gun', 'slowmo':'enter_slowmo_airy'}
+    effects = {'arrow':'laser_gun', 'slowmo':'enter_slowmo_airy',
+                'intercepted':'intercepted_robo'}
     congrats = ['nice_robo', 'golden_robo',]
     pygame.mixer.set_num_channels(32)
 
@@ -1064,6 +1189,8 @@ class Game:
         self.slow_mo = False
         self.slow_mo_rate = 10
         self.display_dt = 0
+        self.stalled = False
+        self.stall_time_left = 0
         self.cam = Camera(self)
         font = pygame.font.get_default_font()
         self.font = pygame.font.SysFont(font, 18)
@@ -1072,7 +1199,15 @@ class Game:
     def print(self, text, row):
         self.debug_surfs[row] = self.font.render(text, True, (255,255,255))
 
-    def update(self, dt): # game
+    def stall(self, ms):
+        self.stalled = True
+        self.stall_time_left = ms
+
+    def resume(self):
+        self.stalled = False
+        self.stall_time_left = 0
+
+    def update(self, dt):
       """
       Game update phase.
       """
@@ -1090,12 +1225,20 @@ class Game:
                 #player1.right = True
                 pass
         elif event.type == pygame.KEYUP:
-            if event.key == K_s:
-                self.slow_mo = True
-            elif event.key == K_f:
-                self.slow_mo = False
+            if event.key == K_k:
+                #self.slow_mo = True
+                Arrow.power += 5
+            elif event.key == K_j:
+                Arrow.power -= 5
+                #self.slow_mo = False
 
       ## Update 
+      if self.stalled and self.stall_time_left > 0:
+          self.stall_time_left -= dt
+          return 
+      else:
+          self.resume()
+
       self.display_dt = dt
       if self.slow_mo:
           self.display_dt = dt / 10
@@ -1116,14 +1259,11 @@ class Game:
               player.apply_force(wind.force*2, 'wind')
           else:
               player.clear_force('wind')
-
-          # collision check between players
-          #player.check_if_hit_other_players()
-
           player.update(dt)
-      #Player.check_for_collisions_between_players()
           
-     
+      for bubble in PlayerBubble.group:
+          bubble.update(dt)
+
       for drop in Drop.group:
           if wind.blowing:
               drop.apply_force(wind.force*0.025, 'wind')
@@ -1155,6 +1295,9 @@ class Game:
       for drop in Drop.group:
           drop.draw(screen)
 
+      for bubble in PlayerBubble.group:
+          bubble.draw(screen)
+
       for arrow in Arrow.group:
           arrow.draw(screen)
 
@@ -1174,6 +1317,7 @@ class Game:
       
       width, height = WIDTH, HEIGHT
       screen = pygame.display.set_mode((width, height), pygame.DOUBLEBUF, 32)
+      self.screen = screen
       
       player1 = Player(pos_x=100)
       player2 = Player(pos_x=WIDTH - 100, skin='hat_red')
