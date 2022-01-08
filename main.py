@@ -394,7 +394,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                 mask = pygame.mask.from_surface(self.image)
                 other = pygame.mask.from_surface(arrow.image)
                 offset = (arrow.rect.x - self.rect.x, arrow.rect.y - self.rect.y)
-                intersection = mask.overlap(other, offset=offset)
+                intersection = mask.overlap(other, offset)
                 if intersection:
                     print('arrows intersect')
                     sound_fx.start_fx('intercepted')
@@ -487,7 +487,7 @@ class PlayerBubble(pygame.sprite.Sprite):
         tip_points = [(w/2,0), (w/2 - w/8, h/4), (w/2 + w/8, h/4)]
         aspect = self.player.width / self.player.height
         thumbnail = pygame.transform.scale(self.player.image,
-                    (self.player.width/2, self.player.height/2))
+                    (self.player.width//2, self.player.height//2))
         thumb_w, thumb_h = thumbnail.get_size()
         image = pygame.Surface((w, h)).convert_alpha()
         pygame.draw.circle(image, color, center, self.w/2) # outer circle
@@ -499,7 +499,7 @@ class PlayerBubble(pygame.sprite.Sprite):
             res_h = thumb_h - i
             res_w = res_h*aspect 
             im = image.copy()
-            thumb_im = pygame.transform.scale(thumbnail, (res_w, res_h))
+            thumb_im = pygame.transform.scale(thumbnail, (int(res_w), int(res_h)))
             tw, th = thumb_im.get_size()
             im.blit(thumb_im, (center[0] - tw/2, center[1] - th/2))
             self.images.append(im)
