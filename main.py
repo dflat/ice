@@ -16,8 +16,8 @@ BG_COLOR = (68,52,86)#(213,221,239)#(76,57,79)#(240,240,255)
 RED = (255,0,0)
 GREY = pygame.Color(100,100,100)#(100,)*3
 PLAYER_COLOR = pygame.Color(193,94,152)
-WIDTH = 1200
-HEIGHT = 480
+WIDTH = 1920#1200
+HEIGHT = 800#480
 IMAGE_PATH = os.path.join('assets','images')
 OBJ_PATH = os.path.join('assets','obj') 
 
@@ -243,9 +243,9 @@ class Drop(pygame.sprite.Sprite):
             self.acc += force
 
         # physics simulation
-        dt /= 1000
-        if game.slow_mo:
-            dt /= 10
+        #dt /= 1000
+        #if game.slow_mo:
+        #    dt /= 10
 
         self.vel += self.acc*dt
         self.vel[0] *= .90 # horizontal air resistance
@@ -322,7 +322,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.rect.y = self.pos[1]
 
     def update(self, dt): # Arrow
-        dt /= 1000
+        #dt /= 1000
         if self.fired:
             self.time_since_fired += dt
 
@@ -778,11 +778,11 @@ class Player(pygame.sprite.Sprite):
     def update(self, dt): ## Player
         self.dir = 1*self.right - 1*self.left
         self.frame += 1
-        self.t += dt
-        dt_in_ms = dt
-        dt /= 1000
-        if game.slow_mo:
-            dt /= 10
+        #self.t += dt
+        #dt_in_ms = dt
+        #dt /= 1000
+        #if game.slow_mo:
+        #    dt /= 10
 
         ## Fetch network control data
         jump_pressed = False
@@ -988,7 +988,8 @@ def vertical_gradient(size, startcolor, endcolor):
     return pygame.transform.scale(bigSurf, size)
 
 class Ice:
-    top = 400
+    ground_level = 80
+    top = HEIGHT - ground_level #400
     group = set()
     def __init__(self):
         self.group.add(self)
@@ -1177,13 +1178,17 @@ class Camera:
 
         self.pos = self.dolly + self.offset # dont mutate pos with offset TODO
 
+
 class Game:
     DEBUG_ROW_HEIGHT = 18
+    MAX_SLOW_FACTOR = 10
+    MAX_SLOW_MO_TIME = 2000
 
     def __init__(self):
         pygame.init()
         self.slow_mo = False
-        self.slow_mo_rate = 10
+        self.slow_factor = self.MAX_SLOW_FACTOR
+        self.elapsed_slow_mo_time = 0
         self.display_dt = 0
         self.stalled = False
         self.stall_time_left = 0
@@ -1207,6 +1212,8 @@ class Game:
         self.stall_time_left = 0
     
     def enter_slow_mo(self, player):
+        self.slow_factor = self.MAX_SLOW_FACTOR
+        self.elapsed_slow_mo_time = 0
         self.slow_mo = True
         player.slowmo_enters += 1
         Player.active_slowmo = player
@@ -1255,31 +1262,44 @@ class Game:
       else:
           self.resume()
 
+
       self.display_dt = dt
       if self.slow_mo:
-          self.display_dt = dt / 10
+          max_slomo_t = self.MAX_SLOW_MO_TIME
+          #if self.slow_mo_exit_signal:
+          #    time_left = max(0, max_slomo_t - self.elapsed_slow_mo_time)
+          #    self.slow_factor = lerp_quad(self.elapsed_slow_mo_time, t_max=max_slomo_t)  
 
-      if len(Drop.group) < 10:
-          Drop(x=random.randint(16, WIDTH-16), y=random.randint(-500, -50))
+          self.elapsed_slow_mo_time += dt
+          self.slow_factor = lerp_quad(self.elapsed_slow_mo_time, t_max=max_slomo_t)  
+          self.display_dt = dt / clamp(self.slow_factor, mn=1, mx=10)
+
+          if self.elapsed_slow_mo_time > self.MAX_SLOW_MO_TIME:
+              game.exit_slow_mo(Player.active_slowmo)
+
+      self.display_dt /= 1000         # convert to seconds
+
 
       self.cam.update(dt)
 
       wind.update()
 
       Player.collisions = { }
-
       Player.check_for_collisions_between_players()
+
       for player in Player.group:
           # handle wind acceleration
           if wind.blowing:
               player.apply_force(wind.force*2, 'wind')
           else:
               player.clear_force('wind')
-          player.update(dt)
+          player.update(self.display_dt)
           
       for bubble in PlayerBubble.group:
-          bubble.update(dt)
+          bubble.update(self.display_dt)
 
+      if len(Drop.group) < 10:
+          Drop(x=random.randint(16, WIDTH-16), y=random.randint(-500, -50))
       for drop in Drop.group:
           if wind.blowing:
               drop.apply_force(wind.force*0.025, 'wind')
@@ -1287,14 +1307,13 @@ class Game:
                                     math.pi*wind.frame/wind.n_frames))
           else:
               drop.clear_force('wind')
-          drop.update(dt)
+          drop.update(self.display_dt)
 
       for arrow in Arrow.group:
           arrow.update(self.display_dt)
-          #arrow.update(dt)
 
       for expl in Explosion.group:
-          expl.update(dt)
+          expl.update(self.display_dt)
 
     def draw(self, screen):
       """
@@ -1361,6 +1380,9 @@ def rescale(x, mn=-math.pi/2, mx=math.pi/2, a=0, b=WIDTH):
 
 def clamp(x, mn=-1, mx=1):
     return min(mx, max(x, mn))
+
+def lerp_quad(t, t_max=1, a=1, b=10):
+    return a + (b-a)*(1 - math.pow(t/t_max, 2))
  
 netcon = network.NetworkConnection()
 netcon.listen()
