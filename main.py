@@ -1182,7 +1182,7 @@ class Camera:
         self.pos = self.dolly + self.offset # dont mutate pos with offset TODO
 
 class Game:
-    DEBUG_ROW_HEIGHT = 20
+    DEBUG_ROW_HEIGHT = 18
 
     def __init__(self):
         pygame.init()
@@ -1194,7 +1194,10 @@ class Game:
         self.cam = Camera(self)
         font = pygame.font.get_default_font()
         self.font = pygame.font.SysFont(font, 18)
-        self.debug_surfs = {1: pygame.Surface((0,0)), 2: pygame.Surface((0,0))}
+        self.debug_surfs = { }#{1: pygame.Surface((0,0)), 2: pygame.Surface((0,0))}
+
+    def display_fps(self):
+        self.print(f'FPS: {self.fps_clock.get_fps():.0f}', 0)
 
     def print(self, text, row):
         self.debug_surfs[row] = self.font.render(text, True, (255,255,255))
@@ -1233,6 +1236,8 @@ class Game:
                 #self.slow_mo = False
 
       ## Update 
+      self.display_fps()
+
       if self.stalled and self.stall_time_left > 0:
           self.stall_time_left -= dt
           return 
@@ -1309,11 +1314,11 @@ class Game:
 
     def draw_debug_info(self, screen):
         for row, surf in self.debug_surfs.items():
-            screen.blit(surf, (0, (row-1)*self.DEBUG_ROW_HEIGHT))
+            screen.blit(surf, (0, row*self.DEBUG_ROW_HEIGHT))
 
     def run(self):
       fps = 60.0
-      fpsClock = pygame.time.Clock()
+      self.fps_clock = pygame.time.Clock()
       
       width, height = WIDTH, HEIGHT
       screen = pygame.display.set_mode((width, height), pygame.DOUBLEBUF, 32)
@@ -1328,7 +1333,7 @@ class Game:
       while True:
         self.update(dt)
         self.draw(screen)
-        dt = fpsClock.tick(fps)
+        dt = self.fps_clock.tick(fps)
       #  print('fps:', fpsClock.get_fps())
 
 def normalize(v):
