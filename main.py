@@ -16,7 +16,7 @@ BG_COLOR = (68,52,86)#(213,221,239)#(76,57,79)#(240,240,255)
 RED = (255,0,0)
 GREY = pygame.Color(100,100,100)#(100,)*3
 PLAYER_COLOR = pygame.Color(193,94,152)
-WIDTH = 1200#640
+WIDTH = 1200
 HEIGHT = 480
 IMAGE_PATH = os.path.join('assets','images')
 OBJ_PATH = os.path.join('assets','obj') 
@@ -285,12 +285,11 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.group.add(self) 
         self.player = player
         self.theta = 0
-        #self.color = pygame.Color(255,255,255).lerp(BG_COLOR, .5) # DUPE color attr
         self.inner_r = 80
-        #self.outer_box = player.rect.inflate(0,0)
 
         self.ring_rect = pygame.Rect(player.rect.center, (self.inner_r*2, self.inner_r*2))
-        self.arch_rect = pygame.Rect(player.rect.center, (self.inner_r*2 + 10, self.inner_r*2))
+        self.arch_rect = pygame.Rect(player.rect.center,
+                                    (self.inner_r*2 + 10, self.inner_r*2))
         
         # Test initializing these attributes here to allow projectile
         # to fire on first frame of existence, before a single update takes place
@@ -401,6 +400,12 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                     arrow.kill()
                     self.kill()
                     ProjectileExplosion(self.pos+intersection)
+
+                    # If player uses unfired arrow as a 'shield'
+                    # to intercept an arrow fired by another player.
+                    if Player.active_slowmo is arrow.player: 
+                        game.exit_slow_mo(arrow.player)
+
                     # Award points to whoever fired second,
                     # as they got the 'interception'; If the player
                     # is loaded but hasn't fired, that counts as
@@ -409,8 +414,6 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                         self.player.intercepted_arrow()
                     else:
                         arrow.player.intercepted_arrow()
-
-
 
     def fire(self):
         self.fired = True
@@ -823,23 +826,16 @@ class Player(pygame.sprite.Sprite):
         if slow_mo_pressed:
             self.slowmo_triggers += 1
             if not game.slow_mo and Player.active_slowmo is None:
-            # Only allow slow-mo if it's not engaged by any player
-                self.slowmo_enters += 1
-                game.slow_mo = True
-                Player.active_slowmo = self
-                self.arrow = Arrow(self)
-                self.slowmo_snd = sound_fx.start_fx('slowmo')
+                # Only allow slow-mo if it's not engaged by any player.
+                game.enter_slow_mo(self)
 
         if slow_mo_exit_pressed:
             self.slowmo_triggers += 1
             if game.slow_mo and Player.active_slowmo is self:
-            # Only allow slow-mo exit if player is the one who triggered current slow-mo
-                self.slowmo_exits += 1
-                game.slow_mo = False
-                Player.active_slowmo = None
-                self.arrow.fire()
-                sound_fx.stop_fx('slowmo', fade_ms=20)
-                sound_fx.start_fx('arrow')
+                # Only allow slow-mo exit if player is the one who
+                # triggered current slow-mo.
+                game.exit_slow_mo(self)
+
 
         # slow-mo timeout in case finish packet is dropped.. hack 'til fix network bug
         #if Player.active_slowmo is self:
@@ -1209,6 +1205,21 @@ class Game:
     def resume(self):
         self.stalled = False
         self.stall_time_left = 0
+    
+    def enter_slow_mo(self, player):
+        self.slow_mo = True
+        player.slowmo_enters += 1
+        Player.active_slowmo = player
+        player.arrow = Arrow(player)
+        player.slowmo_snd = sound_fx.start_fx('slowmo')
+
+    def exit_slow_mo(self, player):
+        self.slow_mo = False
+        player.slowmo_exits += 1
+        Player.active_slowmo = None
+        player.arrow.fire()
+        sound_fx.stop_fx('slowmo', fade_ms=20)
+        sound_fx.start_fx('arrow')
 
     def update(self, dt):
       """
