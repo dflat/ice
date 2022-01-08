@@ -518,7 +518,7 @@ class PlayerBubble(pygame.sprite.Sprite):
             mx_index = self.resolutions - 1
             index = int(rescale(dist_above_top, mn=1, mx=200, a=0, b=mx_index))
             self.image = self.images[9]#clamp(index, mn=0, mx=mx_index)]
-            print('dist above:', dist_above_top, 'i:', index)
+            #print('dist above:', dist_above_top, 'i:', index)
 
     def draw(self, screen):
         if self.visible:
