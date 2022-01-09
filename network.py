@@ -17,8 +17,15 @@ class Client:
 
     def get_record(self, block=False): # used by Player instance
         if self.q.empty():
+            #print('Empty q from player', (self.addr))
             return None
-        return self.q.get(block=block)
+        n = self.q.qsize()         
+        r = self.q.get(block=block)  # grab first record availible
+        if n > 1:                    # merge stale records if there is a backlog
+            for i in range(n-1):
+                r = Record.merge(r, self.q.get())
+        return r
+        #return self.q.get(block=block)
 
 
 class NetworkProfiler:

@@ -19,6 +19,16 @@ class Record:
         self.dy = dy
         self.t = t
 
+    @classmethod
+    def merge(cls, older: 'Record', later: 'Record'):
+        """
+        Keep latest data for stale attributes, but merge button presses 
+        from both Records.
+        """
+        print(f'merged records {older.seq_no} and {later.seq_no}')
+        later.buttons |= older.buttons
+        return later
+
     def jump_pressed(self):
         return True if self.buttons & ButtonState.JUMP else False
 
