@@ -60,17 +60,17 @@ class NetworkProfiler:
 
 class NetworkConnection:
     client_id = 0
-    clients = { }
-    linked_players = { }
+    clients = { }        # addr => Client
+    linked_players = { } # addr => Player
     _lock = threading.Lock()
-    greeting = b'hi' # todo: abstract this to some config dict
+    greeting = b'hi'     # todo: abstract this to some config dict
 
     def __init__(self):
         self.remote = threading.Event()
         self.host = ''
         self.port = 6018
         self.backlog = 5
-        self.size = 9#512# 8192
+        self.size = 512 #9 #8192
         # Store 10 seconds of packet history per client
         self.record_history = defaultdict(lambda: deque(maxlen=60*10))
         self.last_t = time.time()
@@ -100,19 +100,25 @@ class NetworkConnection:
         t.start()
         print('Listening for data...')
 
-    def link_player(self, player, remote):
+    def link_player(self, player, remote): # called by Player object
         while not remote.is_set():
             with self._lock:
                 for addr in self.clients:
                     if addr in self.linked_players:
                         continue
                     else:        # give player reference to a dedicated client
-                        self.linked_players[addr] = id(player)
+                        self.linked_players[addr] = player
                         player.establish_link(self.clients[addr])
                         print('linked to player', id(player))
                         return
             print('attempting to link to player', id(player))
             time.sleep(1)
+
+    def unlink_player(self, addr):
+        player = self.linked_players.pop(addr)
+        #self.clients.pop(addr) # testing...
+        print('Server unlinked player {id(player)} from {addr}')
+        player.disestablish_link()
 
     def register_client(self, addr):
         client = Client(addr)
@@ -135,13 +141,16 @@ class NetworkConnection:
                 data, addr = self.s.recvfrom(self.size) 
                 if data == self.greeting:  # testing this here, in main game loop
                     self.greet(addr)
-                elif data == b'':
+                elif data == b'bye':
                     # client disconnected
+                    print(f'{addr[0]} disconnected.')
+                    # todo: graceful disconnect, tell Player object
+                    self.unlink_player(addr[0])
                     continue
                 else:
                     for record in self.parse_msg(data):
                         #print(record)
-                        self.update(record, addr)
+                        self.update(record, addr[0])
                     #client.send(data) 
             except KeyboardInterrupt:
                 break

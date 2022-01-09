@@ -609,8 +609,16 @@ class Player(pygame.sprite.Sprite):
         t = threading.Thread(target=netcon.link_player, args=(self,self.remote))
         t.start()
 
-    def establish_link(self, client): # will be set by a thread in netcon class
+    def establish_link(self, client): # will be called by a the server
         self.client = client
+
+    def disestablish_link(self):      # will be called by the server
+        """
+        Server will initiate after receiving disconnect message from client;
+        Then, attempt to re-establish connection to player in a new thread.
+        """
+        print(f'Player {id(self)} disconnected')
+        self._connect_to_network()
 
     @classmethod
     def _update_collision_graph(cls):
