@@ -16,6 +16,7 @@ from utils.audio_tools import WaveStream
 BG_COLOR = (68,52,86)#(213,221,239)#(76,57,79)#(240,240,255)
 RED = (255,0,0)
 GREY = pygame.Color(100,100,100)#(100,)*3
+WHITE = (255,255,255)
 PLAYER_COLOR = pygame.Color(193,94,152)
 WIDTH = 1920#1200
 HEIGHT = 800#480
@@ -239,6 +240,14 @@ class Drop(pygame.sprite.Sprite):
             #self.sound.register_miss()
             return self.kill()
 
+        # check for wind force
+        if game.wind.blowing:
+            self.apply_force(game.wind.force*0.025, 'wind')
+            self.rotate(self.max_rotation*game.wind.direction*math.sin(
+                                    math.pi*game.wind.frame/game.wind.n_frames))
+        else:
+            self.clear_force('wind')
+
         # environmental forces
         for force in self.environ_forces.values():
             self.acc += force
@@ -313,14 +322,14 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.pos_history = deque(maxlen=60)
         self.gravity = 20*60
         self.speed = 30*60
-        self.pos = np.array(self.rect.center, dtype='float') # testing...
+        self.pos = np.array(self.rect.topleft, dtype='float') # .center testing...
         self.frame = 0
         self.fired = False
         self.time_since_fired = 0
 
     def update_pos(self):
-        self.rect.x = self.pos[0]
-        self.rect.y = self.pos[1]
+        self.rect.center = self.pos #[0]
+        #self.rect.y = self.pos[1]
 
     def update(self, dt): # Arrow
         #dt /= 1000
@@ -339,7 +348,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
             self.pos_history.append(pos)
             
             # check boundary conditions
-            if pos[1] > HEIGHT + 300 or pos[0] > WIDTH + 300 or pos[0] < -300:
+            if pos[1] > HEIGHT + 900 or pos[0] > WIDTH + 900 or pos[0] < -900: #300
                 self.kill()
 
             self.collision_with_players_check()
@@ -447,11 +456,14 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.draw_trace(screen)
 
     def draw_trace(self, screen):
-        offset = self.aim_center + self.offset
+        #offset = self.aim_center + self.offset
         n = len(self.pos_history)-1
         for i in range(n):
-            if True:#0 < self.pos_history[i][0] < WIDTH - 0:
-                pygame.draw.line(screen, pygame.Color(255,255,255).lerp(BG_COLOR,(1-i/n)),
+            if (0 <= self.pos_history[i][0] < WIDTH - 0
+            and 0 <= self.pos_history[i][1] < HEIGHT):
+                #bg_color = game.bg_image.get_at(self.pos_history[i]) # BG_COLOR
+                bg_color = BG_COLOR #if self.pos_history[i][1] < HEIGHT - 80 else WHITE
+                pygame.draw.line(screen, pygame.Color(255,255,255).lerp(bg_color,(1-i/n)),
                                  self.pos_history[i], self.pos_history[i+1])
 
 def assemble_image(surf, obj_filename, color_map):
