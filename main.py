@@ -10,16 +10,19 @@ from collections import deque, defaultdict
 import math
 import network
 import random
+from heapq import heappush, heappop
 import verts
 from utils.audio_tools import WaveStream
 
 BG_COLOR = (68,52,86)#(213,221,239)#(76,57,79)#(240,240,255)
 RED = (255,0,0)
+PURPLE = (200,0,200)
 GREY = pygame.Color(100,100,100)#(100,)*3
 WHITE = (255,255,255)
 PLAYER_COLOR = pygame.Color(193,94,152)
 WIDTH = 1920#1200
 HEIGHT = 800#480
+SECTOR_WIDTH = 300 # divide up screen into virtual columns (sectors)
 IMAGE_PATH = os.path.join('assets','images')
 OBJ_PATH = os.path.join('assets','obj') 
 
@@ -172,13 +175,16 @@ class Drop(pygame.sprite.Sprite):
                 pygame.Color(216, 233, 236), pygame.Color(174, 220, 220)]
 
     _image_cache = { }
+    _sectors = [] # heap tracking which column of screen Drops are populated
 
     def __init__(self, x=0, y=0, height=48, width=16):
         super().__init__()
         self.group.add(self) 
+        self.assign_sector()
         self.width = width
         self.height = height
-        self._color = random.choice(self.COLORS)
+        self.color_id = random.randint(0, len(self.COLORS)-1)
+        self._color = self.COLORS[self.color_id]
         self.color = self._color
         self.image0 = self._load_image(self.width, self.height, self.color)
         self.image = self.image0.copy()
@@ -187,9 +193,9 @@ class Drop(pygame.sprite.Sprite):
         self.n_ghost_frames = 0 #TODO bug with ghost frames
         self._get_ghost_frames()
         self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
-        self.pos = np.array([x,y], dtype=float)
+        self.pos = np.array([self.x,y], dtype=float)
         self.vel = np.array([0,0], dtype=float)
-        self.gravity = random.randint(10,40)
+        self.gravity = random.randint(10,40)#(10,40)
         self.acc = np.array([0,self.gravity], dtype=float)
         self.t = 0
         self.pos_history = deque(maxlen=self.n_ghost_frames)
@@ -200,6 +206,28 @@ class Drop(pygame.sprite.Sprite):
         self.type = 'regular'
         self.mana = 1
 
+    @classmethod
+    def _init_sectors(cls, n=WIDTH//SECTOR_WIDTH):
+        """
+        keep a heap of 3-item lists,
+        tracking how many drops populate each sector (column) of
+        the screen. use a random int as the second entry for the 
+        dual purpose of random tie-breakers for equally populated sectors,
+        and a random intra-sector pixel offset amount.
+        looks like:
+            [# of drops in sector, randint(pad, SECTOR_WIDTH-pad), sector index].
+        """
+        for i in range(n):
+            heappush(cls._sectors, [0,random.randint(30,SECTOR_WIDTH-30),i])
+
+    def assign_sector(self):
+        s = heappop(self._sectors) 
+        s[0] += 1 
+        s[1] = random.randint(30, SECTOR_WIDTH - 30)
+        self.x = s[2]*SECTOR_WIDTH + s[1]
+        heappush(self._sectors, s)
+        print(self._sectors)
+        
     def _load_image(self, w, h, color):
         im = self._image_cache.get((w,h,tuple(color)))
         if not im: 
@@ -1202,9 +1230,11 @@ class Game:
     MAX_SLOW_FACTOR = 10
     MAX_SLOW_MO_TIME = 2000
 
-    def __init__(self):
+    def __init__(self, debug_rects=False):
+        self.debug_rects = debug_rects
         self._init_pygame()
         self._init_sound()
+        self._init_sprite_configs()
         self.slow_mo = False
         self.slow_factor = self.MAX_SLOW_FACTOR
         self.elapsed_slow_mo_time = 0
@@ -1230,6 +1260,9 @@ class Game:
     def _init_sound(self):
         self.environ_sound = Sound(asset_packs=['environment'], is_environment=True)
         self.sound_fx = Sound(asset_packs=['effects'], is_environment=False)
+
+    def _init_sprite_configs(self):
+        Drop._init_sectors()
 
     def display_fps(self):
         self.print(f'FPS: {self.fps_clock.get_fps():.0f}', 0)
@@ -1336,7 +1369,8 @@ class Game:
           bubble.update(self.display_dt)
 
       if len(Drop.group) < 10:
-          Drop(x=random.randint(16, WIDTH-16), y=random.randint(-500, -50))
+          Drop(y=random.randint(-200, -50))
+
       for drop in Drop.group:
           drop.update(self.display_dt)
 
