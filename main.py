@@ -11,6 +11,7 @@ import math
 import network
 import random
 import verts
+from utils.audio_tools import WaveStream
 
 BG_COLOR = (68,52,86)#(213,221,239)#(76,57,79)#(240,240,255)
 RED = (255,0,0)
@@ -1204,6 +1205,7 @@ class Game:
         font = pygame.font.get_default_font()
         self.font = pygame.font.SysFont(font, 18)
         self.debug_surfs = { }#{1: pygame.Surface((0,0)), 2: pygame.Surface((0,0))}
+        self.music_stream = WaveStream('astley.wav', segment_dur=0.05, overwrite=True)
 
     def display_fps(self):
         self.print(f'FPS: {self.fps_clock.get_fps():.0f}', 0)
@@ -1220,6 +1222,7 @@ class Game:
         self.stall_time_left = 0
     
     def enter_slow_mo(self, player):
+        self.music_stream.set_rate(2)
         self.slow_factor = self.MAX_SLOW_FACTOR
         self.elapsed_slow_mo_time = 0
         self.slow_mo = True
@@ -1229,6 +1232,7 @@ class Game:
         player.slowmo_snd = sound_fx.start_fx('slowmo')
 
     def exit_slow_mo(self, player):
+        self.music_stream.set_rate(1)
         self.slow_mo = False
         player.slowmo_exits += 1
         Player.active_slowmo = None
@@ -1241,10 +1245,13 @@ class Game:
       Game update phase.
       """
       ## Events
+      #print('music q:', game.music_stream.channel.get_queue())
       for event in pygame.event.get():
         if event.type == QUIT:
             quit()
-        if event.type == pygame.KEYDOWN:
+        elif event.type == game.music_stream.chunk_end_event:
+            game.music_stream.queue_next()
+        elif event.type == pygame.KEYDOWN:
             if event.key == K_q:
                 quit()
             elif event.key == K_s:
@@ -1256,10 +1263,12 @@ class Game:
         elif event.type == pygame.KEYUP:
             if event.key == K_k:
                 #self.slow_mo = True
-                Arrow.power += 5
+                #Arrow.power += 5
+                game.music_stream.set_rate(1)
             elif event.key == K_j:
-                Arrow.power -= 5
+                #Arrow.power -= 5
                 #self.slow_mo = False
+                game.music_stream.set_rate(2)
 
       ## Update 
       self.display_fps()
@@ -1366,7 +1375,7 @@ class Game:
       player2 = Player(pos_x=WIDTH - 100, skin='hat_red')
 
       ice = Ice()
-
+      self.music_stream.play()
       dt = 1/fps 
       while True:
         self.update(dt)
