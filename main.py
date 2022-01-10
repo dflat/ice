@@ -876,6 +876,12 @@ class Player(pygame.sprite.Sprite):
         ## Set acceleration due to player input
         self.acc[0] = self.acc_x*self.MAX_ACC
 
+        ## Check for wind force
+        if game.wind.blowing:
+            self.apply_force(game.wind.force*2, 'wind')
+        else:
+            self.clear_force('wind')
+
         ## Add environmental forces (e.g. wind)
         for force in self.environ_forces.values():
             self.acc += force 
@@ -1150,7 +1156,6 @@ class Wind:
         if random.randint(0,60*self.frequency) == 50:
             #print('starting wind')
             self.start()
-wind = Wind()
 
 def close_network_connections():
   for player in Player.group:
@@ -1316,17 +1321,12 @@ class Game:
 
       self.cam.update(dt)
 
-      wind.update()
+      self.wind.update()
 
       Player.collisions = { }
       Player.check_for_collisions_between_players()
 
       for player in Player.group:
-          # handle wind acceleration
-          if wind.blowing:
-              player.apply_force(wind.force*2, 'wind')
-          else:
-              player.clear_force('wind')
           player.update(self.display_dt)
           
       for bubble in PlayerBubble.group:
@@ -1335,12 +1335,6 @@ class Game:
       if len(Drop.group) < 10:
           Drop(x=random.randint(16, WIDTH-16), y=random.randint(-500, -50))
       for drop in Drop.group:
-          if wind.blowing:
-              drop.apply_force(wind.force*0.025, 'wind')
-              drop.rotate(drop.max_rotation*wind.direction*math.sin(
-                                    math.pi*wind.frame/wind.n_frames))
-          else:
-              drop.clear_force('wind')
           drop.update(self.display_dt)
 
       for arrow in Arrow.group:
@@ -1391,8 +1385,15 @@ class Game:
       player1 = Player(pos_x=100)
       player2 = Player(pos_x=WIDTH - 100, skin='hat_red')
 
-      ice = Ice()
-      self.music_stream.play()
+      self.ice = Ice()
+
+      self.wind = Wind()
+      # store a copy of blank bg image
+      self.bg_image = screen.copy()
+      self.bg_image.fill(BG_COLOR)
+      self.ice.draw(self.bg_image)
+
+      self.music_stream.play_threaded()
       dt = 1/fps 
       while True:
         self.update(dt)
