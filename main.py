@@ -1206,6 +1206,8 @@ class Game:
         self.font = pygame.font.SysFont(font, 18)
         self.debug_surfs = { }#{1: pygame.Surface((0,0)), 2: pygame.Surface((0,0))}
         self.music_stream = WaveStream('astley.wav', segment_dur=0.05, overwrite=True)
+        pygame.event.set_allowed([QUIT, KEYDOWN, KEYUP,
+                                  self.music_stream.chunk_end_event])
 
     def display_fps(self):
         self.print(f'FPS: {self.fps_clock.get_fps():.0f}', 0)
@@ -1270,6 +1272,7 @@ class Game:
                 #self.slow_mo = False
                 game.music_stream.set_rate(2)
 
+      pygame.event.pump()
       ## Update 
       self.display_fps()
 
