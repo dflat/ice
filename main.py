@@ -1205,7 +1205,9 @@ class Game:
         font = pygame.font.get_default_font()
         self.font = pygame.font.SysFont(font, 18)
         self.debug_surfs = { }#{1: pygame.Surface((0,0)), 2: pygame.Surface((0,0))}
-        self.music_stream = WaveStream('astley.wav', segment_dur=0.05, overwrite=True)
+        self.music_stream = WaveStream('astley.wav', segment_dur=0.05,
+                                        stretch=1.5, overwrite=True,
+                                        aim_for_even_chunks=True)
         pygame.event.set_allowed([QUIT, KEYDOWN, KEYUP,
                                   self.music_stream.chunk_end_event])
 

@@ -4,7 +4,7 @@ import os
 import sys
 
 def chop_into_samples(wav_path, out_dir, n_segments=-1, seconds_per_cut=1,
-                        start_note=48):
+                        start_note=48, aim_for_even_chunks=False):
     if not os.path.exists(out_dir):
         os.mkdir(out_dir)
     else:
@@ -12,21 +12,48 @@ def chop_into_samples(wav_path, out_dir, n_segments=-1, seconds_per_cut=1,
         if ans.lower() not in ['y','yes']:
             sys.exit(0)
     f = wave.open(wav_path, 'rb')
-    n_frames = int(f.getframerate()*seconds_per_cut)#*f.getnchannels())
+
+    fr = f.getframerate()
+    n_frames = int(fr*seconds_per_cut)#*f.getnchannels())
+
+    hitch_hiker_frames = 0
+    target_frame_size = n_frames
+    total_frames = f.getnframes()
+    chunks, rem_frames = divmod(total_frames, target_frame_size)
+    if aim_for_even_chunks and rem_frames > 0:
+        ## Get chunk sizes to have minimal deviation
+        ## Amortize remainder frames over all chunks
+        n_amortized = rem_frames // chunks
+        if n_amortized == 0: # there are more chunks than remainder frames
+            # tack an extra 'hitch_hiker' frame on the first ''rem_frames'' chunks
+            actual_frame_size = target_frame_size 
+            hitch_hiker_frames = rem_frames 
+            rem_frames = 0
+        else:
+            actual_frame_size = target_frame_size + n_amortized
+            chunks, rem_frames = divmod(total_frames, actual_frame_size) 
+            print(f'Evened out chunk size from {target_frame_size} to {actual_frame_size}')
+        n_segments = chunks
+        n_frames = actual_frame_size
+         
     params = list(f.getparams())
     params[3] = n_frames
     note_midi_val = start_note
     i = 0
     while True:
+        hitch_hiker = 1 if i < hitch_hiker_frames else 0
         if i == n_segments:
             break
         try:
-            segment = f.readframes(n_frames)
+            if aim_for_even_chunks and i == (n_segments-1):
+                n_frames += rem_frames
+            segment = f.readframes(n_frames + hitch_hiker)
             print(len(segment))
             if len(segment) == 0:
                 break
         except wave.Error:
             break
+
         outpath = os.path.join(out_dir, f'{note_midi_val:04d}.wav') 
         with wave.open(outpath, 'wb') as g:
             g.setparams(params)

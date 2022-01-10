@@ -9,8 +9,9 @@ import pygame.locals
 def interp(arr, stretch=2):
     l, r = arr.T
     n = len(l)
+    n_stretch_samples = int(n*stretch)
     t = np.linspace(0,1,n)
-    t_stretch = np.linspace(0,1,n*stretch)
+    t_stretch = np.linspace(0,1, n_stretch_samples)
     l_stretch = np.interp(t_stretch, t, l)
     r_stretch = np.interp(t_stretch, t, r)
     stretched_arr = np.column_stack((l_stretch, r_stretch))
@@ -105,7 +106,8 @@ class WaveChunk:
         
 class WaveStream:
     ROOT = os.path.join('assets','sound','music')
-    def __init__(self, src_path, *, segment_dur=0.1, overwrite=False):
+    def __init__(self, src_path, *, segment_dur=0.1, stretch=2,
+                 aim_for_even_chunks=False, overwrite=False):
         name, ext = src_path.rsplit('.')
         assert(ext == 'wav')
         self.segment_dur = segment_dur
@@ -115,8 +117,9 @@ class WaveStream:
         self.src_path = os.path.join(self.ROOT, src_path)
         pygame.mixer.set_reserved(1)
         self.channel = pygame.mixer.Channel(0)
-        self.chop()
-        self.make_chunks()
+        self.chop(aim_for_even_chunks=aim_for_even_chunks)
+        self.stretch = stretch
+        self.make_chunks(stretch=stretch)
         self.channel.set_endevent(pygame.locals.USEREVENT)
         self.chunk_end_event = self.channel.get_endevent() 
         self.index = 0
@@ -154,14 +157,15 @@ class WaveStream:
             self.index = (self.index + 1) % self.n_chunks
             self.channel.queue(self.chunks[self.rate][self.index]) 
 
-    def chop(self):
+    def chop(self, aim_for_even_chunks):
         if os.path.exists(self.dirpath) and not self.overwrite:
             print('found wave chunk directory')
             return
         wave_chop.chop_into_samples(self.src_path, self.dirpath, n_segments=-1,
-                                    seconds_per_cut=self.segment_dur, start_note=0)
+                                    seconds_per_cut=self.segment_dur, start_note=0,
+                                    aim_for_even_chunks=aim_for_even_chunks)
 
-    def make_chunks(self):
+    def make_chunks(self, stretch=2):
         paths = (i.path for i in os.scandir(self.dirpath))
         self.chunks = {1: [], 2: []}
         self.arrs = {1: [], 2: []}
@@ -170,7 +174,7 @@ class WaveStream:
             dur = get_chunk_len(path)
             snd = pygame.mixer.Sound(path)
             arr = pygame.sndarray.samples(snd)
-            stretched_arr = interp(arr, stretch=2)
+            stretched_arr = interp(arr, stretch)
             snd2 = pygame.sndarray.make_sound(stretched_arr)
             self.chunks[1].append(snd)
             self.chunks[2].append(snd2)
