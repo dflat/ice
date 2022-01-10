@@ -388,7 +388,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                 ## Remove arrow sprite, animate hit
                 self.kill()
                 ProjectileExplosion(self.rect.center)
-                sound_fx.play_congrats()
+                game.sound_fx.play_congrats()
                 game.cam.start_shake()
     
     def collision_with_other_arrows_check(self):
@@ -406,7 +406,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                 intersection = mask.overlap(other, offset)
                 if intersection:
                     print('arrows intersect')
-                    sound_fx.start_fx('intercepted')
+                    game.sound_fx.start_fx('intercepted')
                     arrow.kill()
                     self.kill()
                     ProjectileExplosion(self.pos+intersection)
@@ -799,11 +799,6 @@ class Player(pygame.sprite.Sprite):
     def update(self, dt): ## Player
         self.dir = 1*self.right - 1*self.left
         self.frame += 1
-        #self.t += dt
-        #dt_in_ms = dt
-        #dt /= 1000
-        #if game.slow_mo:
-        #    dt /= 10
 
         ## Fetch network control data
         jump_pressed = False
@@ -1037,11 +1032,9 @@ class Sound:
     instruments = {1:'guitar', 2:'bass'}
     note_orderings = {'guitar': [str(52+i) for i in maj],
                     'bass':[str(52+i) for i in maj]}
-    pygame.mixer.init()
     effects = {'arrow':'laser_gun', 'slowmo':'enter_slowmo_airy',
                 'intercepted':'intercepted_robo'}
     congrats = ['nice_robo', 'golden_robo',]
-    pygame.mixer.set_num_channels(32)
 
     # todo: dynamic sample triggering by song key, and bass follows guitar chord last
     #       hit by player 1, for example...
@@ -1124,8 +1117,6 @@ class Sound:
         self.index = (self.index + 1) % self.n_sounds
         self.is_combo = True
 
-environ_sound = Sound(asset_packs=['environment'], is_environment=True)
-sound_fx = Sound(asset_packs=['effects'], is_environment=False)
 
 
 class Wind:
@@ -1164,6 +1155,7 @@ def close_network_connections():
 
 def quit():
   close_network_connections()
+  game.music_stream.shutdown()
   pygame.quit() 
   sys.exit() # Not including this line crashes the script on Windows. Possibly
 
@@ -1211,7 +1203,8 @@ class Game:
     MAX_SLOW_MO_TIME = 2000
 
     def __init__(self):
-        pygame.init()
+        self._init_pygame()
+        self._init_sound()
         self.slow_mo = False
         self.slow_factor = self.MAX_SLOW_FACTOR
         self.elapsed_slow_mo_time = 0
@@ -1227,6 +1220,16 @@ class Game:
                                         aim_for_even_chunks=True)
         pygame.event.set_allowed([QUIT, KEYDOWN, KEYUP,
                                   self.music_stream.chunk_end_event])
+
+    def _init_pygame(self):
+        pygame.mixer.pre_init(44100, size=-16, channels=2, buffer=32)
+        pygame.init()
+        pygame.mixer.init()
+        pygame.mixer.set_num_channels(8)
+
+    def _init_sound(self):
+        self.environ_sound = Sound(asset_packs=['environment'], is_environment=True)
+        self.sound_fx = Sound(asset_packs=['effects'], is_environment=False)
 
     def display_fps(self):
         self.print(f'FPS: {self.fps_clock.get_fps():.0f}', 0)
@@ -1250,7 +1253,7 @@ class Game:
         player.slowmo_enters += 1
         Player.active_slowmo = player
         player.arrow = Arrow(player)
-        player.slowmo_snd = sound_fx.start_fx('slowmo')
+        player.slowmo_snd = game.sound_fx.start_fx('slowmo')
 
     def exit_slow_mo(self, player):
         self.music_stream.set_rate(1)
@@ -1258,8 +1261,8 @@ class Game:
         player.slowmo_exits += 1
         Player.active_slowmo = None
         player.arrow.fire()
-        sound_fx.stop_fx('slowmo', fade_ms=20)
-        sound_fx.start_fx('arrow')
+        self.sound_fx.stop_fx('slowmo', fade_ms=20)
+        self.sound_fx.start_fx('arrow')
 
     def update(self, dt):
       """
@@ -1270,8 +1273,8 @@ class Game:
       for event in pygame.event.get():
         if event.type == QUIT:
             quit()
-        elif event.type == game.music_stream.chunk_end_event:
-            game.music_stream.queue_next()
+        #elif event.type == game.music_stream.chunk_end_event:
+        #    game.music_stream.queue_next()
         elif event.type == pygame.KEYDOWN:
             if event.key == K_q:
                 quit()

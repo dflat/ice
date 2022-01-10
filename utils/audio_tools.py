@@ -2,8 +2,10 @@ import numpy as np
 import wave
 import io
 import os
-from utils import wave_chop
+import time
+import threading
 import pygame.locals
+from utils import wave_chop
 #from . import config
 
 def interp(arr, stretch=2):
@@ -125,7 +127,24 @@ class WaveStream:
         self.index = 0
         self.n_chunks = len(self.chunks.get(1))
         self.rate = 1
+    
+    def shutdown(self):
+        self._remote.set()
+
+    def play_threaded(self):
+        self._remote = threading.Event()
+        t = threading.Thread(target=self._play_threaded)
+        t.start()
         
+    def _play_threaded(self):
+        delay = self.segment_dur / 2
+        self.play()
+        while not self._remote.is_set():
+            if not self.channel.get_queue():
+                self.queue_next()
+            time.sleep(delay)
+        print('music stream was shutdown.')
+
     def play(self):
         """
         Load the first two chunks (one will play immediately,
