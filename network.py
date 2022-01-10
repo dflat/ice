@@ -115,7 +115,10 @@ class NetworkConnection:
             time.sleep(1)
 
     def unlink_player(self, addr):
-        player = self.linked_players.pop(addr)
+        if addr in self.linked_players:
+            player = self.linked_players.pop(addr)
+        else:
+            raise RuntimeError('Figure out why this keyerror is happening.')
         #self.clients.pop(addr) # testing...
         print('Server unlinked player {id(player)} from {addr}')
         player.disestablish_link()
