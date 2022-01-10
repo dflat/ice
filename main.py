@@ -253,26 +253,39 @@ class Drop(pygame.sprite.Sprite):
 
     def rotate(self, phi): # phi is in degrees
         old_center = self.pos
-        new_image = pygame.transform.rotate(
-                                    self.image0, phi)
+        #new_image = self.rotate_image(self.image0, phi)
+        new_image = pygame.transform.rotate(self.image0, phi)
         self.image = new_image
         self.rect = self.image.get_rect()
         self.rect.center = old_center
         self.phi = phi
+
+    def rotate_image(self, im, phi):
+        im = self._image_cache.get((self.color_id, phi))
+        if not im:
+            im = pygame.transform.rotate(self.image0, phi)
+            self._image_cache[(self.color_id, phi)] = im
+        else:
+            print(f'cached ({len(self._image_cache)}): phi:{phi}, color:{self.color_id}')
+        return im
+
+    def update_pos(self): #TESTING..
+        #self.rect.x = self.pos[0]
+        #self.rect.y = self.pos[1]
+        self.rect.center = self.pos
 
     def update(self, dt): # Drop
         self.frame += 1
 
         # check if off-screen
         if self.pos[1] > HEIGHT + self.height:
-            #self.sound.register_miss()
             return self.kill()
 
         # check for wind force
         if game.wind.blowing:
             self.apply_force(game.wind.force*0.025, 'wind')
-            self.rotate(self.max_rotation*game.wind.direction*math.sin(
-                                    math.pi*game.wind.frame/game.wind.n_frames))
+            self.rotate((self.max_rotation*game.wind.direction*math.sin(
+                                    math.pi*game.wind.frame/game.wind.n_frames)))
         else:
             self.clear_force('wind')
 
@@ -280,16 +293,15 @@ class Drop(pygame.sprite.Sprite):
         for force in self.environ_forces.values():
             self.acc += force
 
-        # physics simulation
-        #dt /= 1000
-        #if game.slow_mo:
-        #    dt /= 10
-
+        # integrate physics
         self.vel += self.acc*dt
+        #self.vel[1] += self.gravity*dt # testing separated gravity 
         self.vel[0] *= .90 # horizontal air resistance
         self.pos += self.vel*dt
-        self.rect.x = self.pos[0]
-        self.rect.y = self.pos[1]
+        self.update_pos()
+
+        # rotate to match velocity tangent 
+        #self.rotate(90 - np.angle(complex(*normalize((self.vel))), deg=True))
 
         # remember position history
         self.pos_history.append(self.pos.copy())
@@ -302,7 +314,11 @@ class Drop(pygame.sprite.Sprite):
         if self.frame > self.n_ghost_frames:
             for i in range(self.n_ghost_frames):
                 screen.blit(self.ghost_images[i], self.pos_history[i])
-        screen.blit(self.image, self.pos + game.cam.pos)
+        screen.blit(self.image, self.rect.topleft + game.cam.pos)
+        if game.debug_rects:
+            pygame.draw.rect(screen, WHITE, self.rect, width=1)
+            tangent = 20*normalize((self.vel))
+            pygame.draw.line(screen, PURPLE, self.pos, self.pos + tangent) 
 
     def _get_ghost_frames(self):
         n = self.n_ghost_frames
@@ -930,8 +946,9 @@ class Player(pygame.sprite.Sprite):
         self.vel[0] *= self.friction
         self.vel[0] = max(-self.MAX_VEL, min(self.vel[0], self.MAX_VEL))
         self.pos[0] += self.vel[0] * dt
-        self.rect.x = self.pos[0]
-        self.rect.y = self.pos[1]
+        self.update_pos()
+        #self.rect.x = self.pos[0]
+        #self.rect.y = self.pos[1]
 
         ## Select the correct sprite image to display
         if self.acc[0] > 0:
@@ -1173,8 +1190,8 @@ class Wind:
 
     def chance(self):
         if random.randint(0,60*self.frequency) == 50:
-            #print('starting wind')
             self.start()
+            print('wind started blowing')
 
 def close_network_connections():
   for player in Player.group:
@@ -1412,7 +1429,7 @@ class Game:
             screen.blit(surf, (0, row*self.DEBUG_ROW_HEIGHT))
 
     def run(self):
-      fps = 60.0
+      self.fps = 60.0
       self.fps_clock = pygame.time.Clock()
       
       width, height = WIDTH, HEIGHT
@@ -1431,11 +1448,11 @@ class Game:
       self.ice.draw(self.bg_image)
 
       self.music_stream.play_threaded()
-      dt = 1/fps 
+      dt = 1/self.fps 
       while True:
         self.update(dt)
         self.draw(screen)
-        dt = self.fps_clock.tick(fps)
+        dt = self.fps_clock.tick(self.fps)
       #  print('fps:', fpsClock.get_fps())
 
 def normalize(v):
