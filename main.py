@@ -11,6 +11,7 @@ import math
 import network
 import random
 from heapq import heappush, heappop
+from PIL import Image, ImageFilter
 import verts
 from utils.audio_tools import WaveStream
 
@@ -109,13 +110,15 @@ class SnowPlume(Explosion):
     flipped = [pygame.transform.flip(im,True,False) for im in frames]
     n_frames = len(frames)
     frame_dupes = [2]*n_frames
-    offset = np.array([12, 32])
-    flipped_offset = np.array([-offset[0], offset[1]])
+    offset_shift = np.array([12, 32])
+    flipped_offset_shift = np.array([-offset_shift[0], offset_shift[1]])
     active = { }
     frame_seq = list(range(n_frames)) + list(reversed(range(n_frames)))[1:-1]
 
     def __init__(self, pos, player):
-        super().__init__(pos)
+        super().__init__(pos) #  TESTING
+        self.offset = self.offset_shift - player.center_offset
+        self.flipped_offset = self.flipped_offset_shift - player.center_offset
         self.player = player
         self.active[id(player)] = self
         self.killed = False
@@ -192,7 +195,7 @@ class Drop(pygame.sprite.Sprite):
 
         self.n_ghost_frames = 0 #TODO bug with ghost frames
         self._get_ghost_frames()
-        self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
+        self.center_offset = np.array([self.width//2,self.height//2], dtype=np.int64)
         self.pos = np.array([self.x,y], dtype=float)
         self.vel = np.array([0,0], dtype=float)
         self.gravity = random.randint(10,40)#(10,40)
@@ -279,9 +282,7 @@ class Drop(pygame.sprite.Sprite):
             forces += force
         return forces
 
-    def update_pos(self): #TESTING..
-        #self.rect.x = self.pos[0]
-        #self.rect.y = self.pos[1]
+    def update_pos(self): 
         self.rect.center = self.pos
 
     def update(self, dt): # Drop
@@ -313,7 +314,8 @@ class Drop(pygame.sprite.Sprite):
             self.vel[1] = 0
             self.register_force(np.array([0, -self.gravity]), 'ground normal')
             print('icicle landed')
-
+        
+        #self.pos += game.cam.pos # TESTING
         self.update_pos()
 
 
@@ -328,7 +330,7 @@ class Drop(pygame.sprite.Sprite):
         if self.frame > self.n_ghost_frames:
             for i in range(self.n_ghost_frames):
                 screen.blit(self.ghost_images[i], self.pos_history[i])
-        screen.blit(self.image, self.rect.topleft + game.cam.pos)
+        screen.blit(self.image, self.rect.topleft + game.cam.offset)
         if game.debug_rects:
             pygame.draw.rect(screen, WHITE, self.rect, width=1)
             tangent = 20*normalize((self.vel))
@@ -620,6 +622,9 @@ class Player(pygame.sprite.Sprite):
     colors = {1: pygame.Color(39,36,41),
               2: pygame.Color(200,0,255).lerp((39,36,41), .8),
     }
+    W = 64*2
+    H = 32*2
+    #reflection_offset = np.array([0, H])
 
     # defunct
     #color_map = {'base':pygame.Color(0,0,0), 'belly':pygame.Color(240,240,240),
@@ -635,6 +640,7 @@ class Player(pygame.sprite.Sprite):
         self.height = height*2
         self.skin = skin
         self._init_images()
+        self._init_reflections()
         self.image = self.images[-1]['1']
         self.rect = self.image.get_rect() 
 
@@ -642,13 +648,13 @@ class Player(pygame.sprite.Sprite):
         self.color = color
 
         self.n_ghost_frames = 2
-        self._get_ghost_frames()
+        self._init_ghost_frames()
         self.pos_history = deque(maxlen=self.n_ghost_frames+10)
         self.packet_history = deque(maxlen=4)
 
         self.t = 0
-        self.pos = np.array([pos_x, Ice.top - self.height/2], dtype=float)
-        self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
+        self.pos = np.array([pos_x, Ice.top], dtype=float)
+        self.center_offset = np.array([self.width//2,self.height//2], dtype=np.int64)
         self.vel = np.array([0,0], dtype=float)
         self.acc = np.array([0,0], dtype=float)
         self.acc_x_input = 0
@@ -724,11 +730,51 @@ class Player(pygame.sprite.Sprite):
             # palette swap
             palette_swap(im, (0,0,0), pygame.Color(0,0,0).lerp(BG_COLOR, .5))
             im = pygame.transform.scale2x(im)
-            flipped = pygame.transform.flip(im,True,False)
+            flipped_x = pygame.transform.flip(im, True, False)
             self.images[-1][phase] = im 
-            self.images[1][phase] = flipped
-        self.hitbox = pygame.Surface(im.get_size())
-        self.hitbox.fill((255,0,0))
+            self.images[1][phase] = flipped_x
+        self.hit_im = pygame.Surface(im.get_size())
+        self.hit_im.fill((255,0,0))
+
+    def get_reflection_image(self, intensity):
+        return self.images[self.direction << intensity+1][self.phase]
+
+    def _init_reflections(self):
+        self.max_reflection_resolution = 10
+        n = self.max_reflection_resolution
+        alphas = [int(60 * (i/n) ) for i in range(n)] # 0 is transparent
+        for phase in set(self.phases):
+            im = self.images[-1][phase].copy() 
+            flipped_x = self.images[1][phase].copy() 
+            flipped_y =  pygame.transform.flip(im, False, True)
+            flipped_x_and_y = pygame.transform.flip(flipped_x, False, True)
+            for i in range(self.max_reflection_resolution):
+                im_fy = flipped_y.copy()
+
+                # apply progressive blur and alpha to each reflected image
+                im_bytes = pygame.image.tostring(im_fy, 'RGBA', False)
+                pil_im = Image.frombytes('RGBA', im_fy.get_size(), im_bytes)
+                pil_im = pil_im.filter(ImageFilter.BoxBlur(radius=13-i))
+                im_fy = pygame.image.fromstring(pil_im.tobytes(),pil_im.size,'RGBA')
+
+                im_fxy = pygame.transform.flip(im_fy, True, False)
+                im_fy.set_alpha(alphas[i])
+                im_fxy.set_alpha(alphas[i])
+
+                # lazy bit-shift indexing hack to avoid making a new dict layer
+                self.images[-1 << i+1][phase] = im_fy
+                self.images[1 << i+1][phase] = im_fxy
+
+    def _init_ghost_frames(self):
+        n = self.n_ghost_frames
+        self.ghost_images = defaultdict(lambda: defaultdict(list))
+        self.ghost_alphas = [int(40 * ((i+1)/n) ) for i in range(n)]
+        for phase in set(self.phases):
+            for i in range(n):
+                im = self.images[-1][phase].copy()
+                im.set_alpha(self.ghost_alphas[i])
+                self.ghost_images[-1][phase].append(im)
+                self.ghost_images[1][phase].append(pygame.transform.flip(im,True,False)) 
 
     def register_force(self, force, name):
         self.environ_forces[name] = force
@@ -738,19 +784,8 @@ class Player(pygame.sprite.Sprite):
         self.environ_forces.pop(name)
 
     @property
-    def center(self):
-        return self.pos + self.center_offset
-
-    def _get_ghost_frames(self):
-        n = self.n_ghost_frames
-        self.ghost_images = defaultdict(lambda: defaultdict(list))
-        self.ghost_alphas = [int(40 * ((i+1)/n) ) for i in range(n)]
-        for phase in self.phases:
-            for i in range(n):
-                im = self.images[-1][phase].copy()
-                im.set_alpha(self.ghost_alphas[i])
-                self.ghost_images[-1][phase].append(im)
-                self.ghost_images[1][phase].append(pygame.transform.flip(im,True,False)) 
+    def topleft(self):
+        return self.pos - self.center_offset
 
     def check_drop_collisions(self):
         hit = pygame.sprite.spritecollideany(self, Drop.group)
@@ -766,11 +801,11 @@ class Player(pygame.sprite.Sprite):
 
     # TODO: fix this hack
     def check_collision_with_ground(self):
-        if self.vel[1] < 0 and self.pos[1] >= Ice.top - self.height/2:# + 2:
+        if self.vel[1] < 0 and self.pos[1] >= Ice.top:# + 2:
             self.jumping = False
             #print('stopped')
             self.vel[1] = 0
-        self.pos[1] = min(self.pos[1], Ice.top - self.height/2) # dont fall thru floor
+        self.pos[1] = min(self.pos[1], Ice.top) # dont fall thru floor
 
     def intercepted_arrow(self):
         print(f'Player {self.player_id} intercepted an arrow.')
@@ -781,9 +816,7 @@ class Player(pygame.sprite.Sprite):
         self.ammo[drop.type] += 1
         
     def update_pos(self):
-        self.rect.x = self.pos[0]
-        self.rect.y = self.pos[1]
-        #self.rect.center = self.pos
+        self.rect.center = self.pos
 
     def check_next_pos(self):
         pass
@@ -969,9 +1002,9 @@ class Player(pygame.sprite.Sprite):
         self.vel[0] *= self.friction
         self.vel[0] = max(-self.MAX_VEL, min(self.vel[0], self.MAX_VEL))
         self.pos[0] += self.vel[0] * dt
+
+        #self.pos += game.cam.pos # TESTING
         self.update_pos()
-        #self.rect.x = self.pos[0]
-        #self.rect.y = self.pos[1]
 
         ## Select the correct sprite image to display
         if self.acc[0] > 0:
@@ -987,7 +1020,7 @@ class Player(pygame.sprite.Sprite):
         self.display_image = self.images[self.direction][self.phase]
 
         if self.getting_hit:
-            self.display_image = self.hitbox
+            self.display_image = self.hit_im
 
         ## Control sounds and animations triggered by player state
         if self.phase != prev_phase:
@@ -1033,7 +1066,7 @@ class Player(pygame.sprite.Sprite):
                 if 20 < self.pos_history[i][0] < WIDTH - 20 and random.randint(0,1)==1:
                     pygame.draw.circle(screen, pygame.Color(255,255,255).lerp(
                         BG_COLOR,(1-i/n)),
-                        self.pos_history[i] + self.center_offset +
+                        self.pos_history[i] - self.center_offset +
                         (random.randint(0,r) - r/2, random.randint(0,r) - r/2),
                         random.randint(1,7), width=0)#random.randint(0,1))
                         #self.pos_history[i+1] + self.center_offset)
@@ -1043,9 +1076,17 @@ class Player(pygame.sprite.Sprite):
         if self.frame > ngf:
             for i in range(ngf):
                 screen.blit(self.ghost_images[self.direction][self.phase][i],
-                                                self.pos_history[n-ngf+i+1])
+                            self.pos_history[n-ngf+i+1] - self.center_offset)
         # draw sprite
-        screen.blit(self.display_image, self.pos + game.cam.pos)
+        screen.blit(self.display_image, self.rect.topleft + game.cam.offset)
+
+        # draw reflection in ice
+        max_refl_height = 200
+        dist_above_ice = game.ice.mid - self.rect.bottom
+        intensity = rescale(dist_above_ice, mn=0, mx=max_refl_height, a=0, b=9)
+        refl_im = self.get_reflection_image(9 - clamp(int(intensity), mn=0, mx=9))
+        screen.blit(refl_im, (self.rect.left, game.ice.mid) + game.cam.offset)
+        
 
         if game.debug_rects:
             pygame.draw.rect(screen, WHITE, self.rect, width=1)
@@ -1086,10 +1127,15 @@ class Ice:
         self.group.add(self)
         self.color = pygame.Color(232,238,252,255)
         self.image = vertical_gradient((WIDTH+100,80 +20), BG_COLOR+(255,), self.color)
-        self.pos = np.array([-50,self.top])
+        self.pos = np.array([-50,self.top], dtype=float)
         self.rect = self.image.get_rect()
+
+    def update(self, dt):
+        pass
+        #self.pos += game.cam.pos # TESTING
+
     def draw(self, screen):
-        screen.blit(self.image, self.pos + game.cam.pos) 
+        screen.blit(self.image, self.pos + game.cam.offset) 
 
 class Sound:
     maj = [0,2,4,5,7,9,11]
@@ -1238,9 +1284,9 @@ def quit():
 class Camera:
     def __init__(self, game):
         self.game = game
-        self.pos = np.array((0,0))
-        self.dolly = np.array((0,0))
-        self.offset = np.array((0,0))
+        self.pos = np.array((0,0), dtype=float)
+        self.dolly = np.array((0,0), dtype=float)
+        self.offset = np.array((0,0), dtype=float)
         self.impact = False
 
     def reset(self):
@@ -1269,8 +1315,9 @@ class Camera:
                 # todo: maybe taper the shake amount every frame
             else:
                 self.clear_shake()
-
-        self.pos = self.dolly + self.offset # dont mutate pos with offset TODO
+        self.dolly[0] = 10*math.sin((1/16)*2*np.pi*game.t/1000)
+        self.dolly[1] = 5*math.sin((1/8)*2*np.pi*game.t/1000)
+        self.pos = self.dolly #+ self.offset # dont mutate pos with offset TODO
 
 
 class Game:
@@ -1287,6 +1334,7 @@ class Game:
         self.slow_factor = self.MAX_SLOW_FACTOR
         self.elapsed_slow_mo_time = 0
         self.display_dt = 0
+        self.t = 0
         self.stalled = False
         self.stall_time_left = 0
         self.cam = Camera(self)
@@ -1376,6 +1424,7 @@ class Game:
                 game.music_stream.set_rate(2)
 
       pygame.event.pump()
+
       ## Update 
       self.display_fps()
 
@@ -1385,7 +1434,7 @@ class Game:
       else:
           self.resume()
 
-
+      self.t += dt
       self.display_dt = dt
       if self.slow_mo:
           max_slomo_t = self.MAX_SLOW_MO_TIME
@@ -1409,6 +1458,9 @@ class Game:
 
       Player.collisions = { }
       Player.check_for_collisions_between_players()
+
+      for ice in Ice.group:
+          ice.update(self.display_dt)
 
       for player in Player.group:
           player.update(self.display_dt)
