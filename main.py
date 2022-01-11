@@ -662,8 +662,6 @@ class Player(pygame.sprite.Sprite):
         self.MAX_VEL = 640*2
         self.MAX_ACC = 1600*2
 
-        self.left = False
-        self.right = False
         self.missed = 0
         self.frame = 0
         self.friction = 0.97 # 0.99 Test out best value ..
@@ -903,31 +901,32 @@ class Player(pygame.sprite.Sprite):
             self.vel -= self.vel #/ 1 # todo.. testing
             print('%d hit %d' % (self.player_id, other_player.player_id))
 
-    def update(self, dt): ## Player
-        self.dir = 1*self.right - 1*self.left
-        self.frame += 1
-
-        ## Fetch network control data
-        jump_pressed = False
-        slow_mo_pressed = False
-        slow_mo_exit_pressed = False
+    def fetch_network_input(self):
         if self.client:
-            record = self.client.get_record()  #self.netcon.get_record()
+            record = self.client.get_record()
             if record:
-                #assert(record.seq_no == self.last_seq_no + 1)
                 # TODO: give receipt confirmation and message redundancy in network layer
                 # until confirmed that record seq_no was received
                 if (record.seq_no != self.last_seq_no + 1):
                     self.dropped_packets += 1
                     rate = self.dropped_packets / record.seq_no
                     print('DROPPED PACKET', self.last_seq_no + 1, f'DROP RATE:{rate:.3%}')
+
                 self.last_seq_no = record.seq_no
                 self.acc_x_input = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
-                jump_pressed = record.jump_pressed()
-                slow_mo_pressed = record.slow_mo_pressed()
-                slow_mo_exit_pressed = record.slow_mo_exit_pressed()
+                self.jump_pressed = record.jump_pressed()
+                self.slow_mo_pressed = record.slow_mo_pressed()
+                self.slow_mo_exit_pressed = record.slow_mo_exit_pressed()
                 self.dy = record.dy
-                #print(record)
+
+    def update(self, dt): ## Player
+        self.frame += 1
+
+        self.jump_pressed = False
+        self.slow_mo_pressed = False
+        self.slow_mo_exit_pressed = False
+
+        self.fetch_network_input()
 
         stat = Player.active_slowmo.player_id if Player.active_slowmo else 'None'
         msg = f'Slow Mo: {stat}, presses: {self.slowmo_triggers}, '\
@@ -936,7 +935,7 @@ class Player(pygame.sprite.Sprite):
         game.print(msg, self.player_id)
 
         ## Only allow one player to slow down time at once
-        if slow_mo_pressed and slow_mo_exit_pressed:
+        if self.slow_mo_pressed and self.slow_mo_exit_pressed:
             # Too quick, cancel attempt if game is normal speed, 
             # exit slowmo if already started
             # If game is normal speed, this will work fine,
@@ -946,31 +945,20 @@ class Player(pygame.sprite.Sprite):
             # lets just see if this works
             print('player sent both slow-mo flags in one network frame')
 
-        if slow_mo_pressed:
+        if self.slow_mo_pressed:
             self.slowmo_triggers += 1
             if not game.slow_mo and Player.active_slowmo is None:
                 # Only allow slow-mo if it's not engaged by any player.
                 game.enter_slow_mo(self)
 
-        if slow_mo_exit_pressed:
+        if self.slow_mo_exit_pressed:
             self.slowmo_triggers += 1
             if game.slow_mo and Player.active_slowmo is self:
                 # Only allow slow-mo exit if player is the one who
                 # triggered current slow-mo.
                 game.exit_slow_mo(self)
 
-
-        # slow-mo timeout in case finish packet is dropped.. hack 'til fix network bug
-        #if Player.active_slowmo is self:
-        #    self.slow_mo_dur += dt_in_ms
-        #    if self.slow_mo_dur > 10000:
-        #        self.slow_mo_dur = 0
-        #        Player.active_slowmo = None
-        #        self.arrow.kill()
-        #        game.slow_mo = False
-        #        print('auto-timed out of slowmo')
-
-        if jump_pressed and not self.jumping:
+        if self.jump_pressed and not self.jumping:
             print('jump pressed') 
             self.vel[1] -= 1000
             self.jumping = True
