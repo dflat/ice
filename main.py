@@ -293,7 +293,10 @@ class Drop(pygame.sprite.Sprite):
 
         # check for wind force
         if game.wind.blowing:
-            self.rotate((self.max_rotation/game.wind.strength)*game.wind.force[0])
+            #self.rotate((self.max_rotation/game.wind.strength)*game.wind.force[0])
+            # rotate to match velocity tangent 
+            pass
+        self.rotate(90 - np.angle(complex(*normalize((self.vel))), deg=True))
 
 
         self.acc = self.sum_of_forces() #/ self.mass
@@ -311,14 +314,8 @@ class Drop(pygame.sprite.Sprite):
             self.register_force(np.array([0, -self.gravity]), 'ground normal')
             print('icicle landed')
 
-        # clamp off low vel
-        #if self.acc[0] == 0 and self.vel[0] < 3:
-        #    self.vel[0] = 0
-        #print('icicle acc:', self.acc, 'vel:', self.vel)
         self.update_pos()
 
-        # rotate to match velocity tangent 
-        #self.rotate(90 - np.angle(complex(*normalize((self.vel))), deg=True))
 
         # remember position history
         self.pos_history.append(self.pos.copy())
@@ -786,6 +783,7 @@ class Player(pygame.sprite.Sprite):
     def update_pos(self):
         self.rect.x = self.pos[0]
         self.rect.y = self.pos[1]
+        #self.rect.center = self.pos
 
     def check_next_pos(self):
         pass
