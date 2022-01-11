@@ -196,11 +196,13 @@ class Drop(pygame.sprite.Sprite):
         self.pos = np.array([self.x,y], dtype=float)
         self.vel = np.array([0,0], dtype=float)
         self.gravity = random.randint(10,40)#(10,40)
-        self.acc = np.array([0,self.gravity], dtype=float)
+        self.acc = np.array([0,0], dtype=float)
         self.t = 0
         self.pos_history = deque(maxlen=self.n_ghost_frames)
         self.frame = 0
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
+        self.register_force(np.array([0, self.gravity]), 'gravity')  
+        self.register_force(game.wind.force, 'wind') # register wind force
         self.twinkle_freq = random.randint(60*1, 60*2)
         self.max_rotation = random.randint(10, 40)
         self.type = 'regular'
@@ -245,11 +247,12 @@ class Drop(pygame.sprite.Sprite):
         #self.image0 = im
         #self.image = im.copy()
 
-    def apply_force(self, force, name):
-        self.environ_forces[name] += force
+    def register_force(self, force, name):
+        self.environ_forces[name] = force
 
     def clear_force(self, name):
-        self.environ_forces[name] = np.array([0,0], dtype=float)
+        #self.environ_forces[name] = np.array([0,0], dtype=float)
+        self.environ_forces.pop(name)
 
     def rotate(self, phi): # phi is in degrees
         old_center = self.pos
@@ -269,6 +272,12 @@ class Drop(pygame.sprite.Sprite):
             print(f'cached ({len(self._image_cache)}): phi:{phi}, color:{self.color_id}')
         return im
 
+    def sum_of_forces(self):
+        forces = np.array([0,0], dtype=float)
+        for force in self.environ_forces.values():
+            forces += force
+        return forces
+
     def update_pos(self): #TESTING..
         #self.rect.x = self.pos[0]
         #self.rect.y = self.pos[1]
@@ -283,21 +292,23 @@ class Drop(pygame.sprite.Sprite):
 
         # check for wind force
         if game.wind.blowing:
-            self.apply_force(game.wind.force*0.025, 'wind')
-            self.rotate((self.max_rotation*game.wind.direction*math.sin(
-                                    math.pi*game.wind.frame/game.wind.n_frames)))
-        else:
-            self.clear_force('wind')
+            self.rotate((self.max_rotation/game.wind.strength)*game.wind.force[0])
 
-        # environmental forces
-        for force in self.environ_forces.values():
-            self.acc += force
+        # check if hit ground
+        #if self.rect.bottom > game.ice.top:
+        #    self.register_force(np.array([0, -self.gravity]))
+
+        self.acc = self.sum_of_forces() #/ self.mass
 
         # integrate physics
+        self.pos += self.vel*dt # testing pos integr. before vel
         self.vel += self.acc*dt
-        #self.vel[1] += self.gravity*dt # testing separated gravity 
         self.vel[0] *= .90 # horizontal air resistance
-        self.pos += self.vel*dt
+
+        # clamp off low vel
+        #if self.acc[0] == 0 and self.vel[0] < 3:
+        #    self.vel[0] = 0
+        #print('icicle acc:', self.acc, 'vel:', self.vel)
         self.update_pos()
 
         # rotate to match velocity tangent 
@@ -499,6 +510,11 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         pygame.draw.circle(screen, (255,255,255), self.aim_center, 4)
         self.draw_trace(screen)
 
+        if game.debug_rects:
+            pygame.draw.rect(screen, WHITE, self.rect, width=1)
+            tangent = 20*normalize((self.vel))
+            pygame.draw.line(screen, PURPLE, self.pos, self.pos + tangent) 
+
     def draw_trace(self, screen):
         #offset = self.aim_center + self.offset
         n = len(self.pos_history)-1
@@ -608,7 +624,7 @@ class Player(pygame.sprite.Sprite):
     #            'eyeball':pygame.Color(255,255,255)
     #            }
 
-    def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=None, skin=None):
+    def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=0, skin=None):
         super().__init__()
         #self._register_new_player()
         self.group.add(self) 
@@ -624,25 +640,25 @@ class Player(pygame.sprite.Sprite):
 
         self.n_ghost_frames = 2
         self._get_ghost_frames()
-
-        self.pos = np.array([0,Ice.top - self.height/2], dtype=float)
-        if pos_x:
-            self.pos[0] = pos_x
-        self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
-        self.t = 0
-        self.vel = np.array([0,0], dtype=float)
-        self.acc = np.array([0,0], dtype=float)
-        self.MAX_VEL = 640*2
-        self.MAX_ACC = 1600*2
-        self.left = False
-        self.right = False
         self.pos_history = deque(maxlen=self.n_ghost_frames+10)
         self.packet_history = deque(maxlen=4)
+
+        self.t = 0
+        self.pos = np.array([pos_x, Ice.top - self.height/2], dtype=float)
+        self.center_offset = np.array([self.width//2,self.height//2], dtype=float)
+        self.vel = np.array([0,0], dtype=float)
+        self.acc = np.array([0,0], dtype=float)
+        self.acc_x_input = 0
+        self.MAX_VEL = 640*2
+        self.MAX_ACC = 1600*2
+
+        self.left = False
+        self.right = False
         self.missed = 0
-        self.acc_x = 0
         self.frame = 0
         self.friction = 0.99
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
+        self.register_force(game.wind.force*2, 'wind') # register wind force
         self.direction = -1
         self.phase = self.phases[0]
         self.getting_hit = False
@@ -711,11 +727,12 @@ class Player(pygame.sprite.Sprite):
         self.hitbox = pygame.Surface(im.get_size())
         self.hitbox.fill((255,0,0))
 
-    def apply_force(self, force, name):
-        self.environ_forces[name] += force
+    def register_force(self, force, name):
+        self.environ_forces[name] = force
 
     def clear_force(self, name):
-        self.environ_forces[name] = np.array([0,0], dtype=float)
+        #self.environ_forces[name] = np.array([0,0], dtype=float)
+        self.environ_forces.pop(name)
 
     @property
     def center(self):
@@ -743,6 +760,14 @@ class Player(pygame.sprite.Sprite):
             self.last_hit = t
             Explosion(hit.pos + np.array([0,hit.height]))
             self.update_inventory(hit)
+
+    # TODO: fix this hack
+    def check_collision_with_ground(self):
+        if self.vel[1] < 0 and self.pos[1] >= Ice.top - self.height/2:# + 2:
+            self.jumping = False
+            #print('stopped')
+            self.vel[1] = 0
+        self.pos[1] = min(self.pos[1], Ice.top - self.height/2) # dont fall thru floor
 
     def intercepted_arrow(self):
         print(f'Player {self.player_id} intercepted an arrow.')
@@ -859,7 +884,7 @@ class Player(pygame.sprite.Sprite):
                     rate = self.dropped_packets / record.seq_no
                     print('DROPPED PACKET', self.last_seq_no + 1, f'DROP RATE:{rate:.3%}')
                 self.last_seq_no = record.seq_no
-                self.acc_x = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
+                self.acc_x_input = rescale(record.roll, mn=-128, mx=127, a=-1, b=1)
                 jump_pressed = record.jump_pressed()
                 slow_mo_pressed = record.slow_mo_pressed()
                 slow_mo_exit_pressed = record.slow_mo_exit_pressed()
@@ -913,13 +938,13 @@ class Player(pygame.sprite.Sprite):
             self.jumping = True
 
         ## Set acceleration due to player input
-        self.acc[0] = self.acc_x*self.MAX_ACC
+        self.acc[0] = self.acc_x_input*self.MAX_ACC
 
         ## Check for wind force
-        if game.wind.blowing:
-            self.apply_force(game.wind.force*2, 'wind')
-        else:
-            self.clear_force('wind')
+        #if game.wind.blowing:
+        #    self.register_force(game.wind.force*2, 'wind')
+        #else:
+        #    self.clear_force('wind')
 
         ## Add environmental forces (e.g. wind)
         for force in self.environ_forces.values():
@@ -933,13 +958,7 @@ class Player(pygame.sprite.Sprite):
         self.vel[1] = max(-self.MAX_VEL, min(self.vel[1], self.MAX_VEL))
         self.pos[1] -= self.vel[1] * dt  # _subtract_ y pos due to flipped y-axis
 
-        # TODO: fix this hack
-        if self.vel[1] < 0 and self.pos[1] >= Ice.top - self.height/2:# + 2:
-            self.jumping = False
-            #print('stopped')
-            self.vel[1] = 0
-
-        self.pos[1] = min(self.pos[1], Ice.top - self.height/2) # dont fall thru floor
+        self.check_collision_with_ground()
 
         ## Update player physics
         self.vel[0] += self.acc[0] * dt
@@ -1024,11 +1043,11 @@ class Player(pygame.sprite.Sprite):
         # draw sprite
         screen.blit(self.display_image, self.pos + game.cam.pos)
 
-        # draw velocity vector representation
-        #pygame.draw.line(screen, (255,0,255), self.rect.center, 
-        #                            self.rect.center + 100*np.array([self.vel[0],
-        #                                        -self.vel[1]])/np.linalg.norm(self.vel),
-        #                                        width = 4)
+        if game.debug_rects:
+            pygame.draw.rect(screen, WHITE, self.rect, width=1)
+            tangent = 40*normalize((self.vel))
+            pygame.draw.line(screen, PURPLE, self.pos, self.pos + tangent, width=2) 
+
         #print('vel:', self.vel, 'pos:', self.pos)
 
 def vertical_gradient(size, startcolor, endcolor):
@@ -1169,15 +1188,18 @@ class Wind:
         self.blowing = False
         self.frame = 0
         self.direction = 1
-        self.strength = 1
+        self.strength = 60*3#1
         self.frequency = 10 # average seconds between gusts of wind
-        self.force = np.array([1,0])
+        self.force = np.array([0,0])
 
     def start(self, n_frames=60*3):
         self.n_frames = n_frames
         self.frame = 0
         self.direction = 1 if random.random() > 0.5 else -1
-        self.force = np.array([self.direction*self.strength, 0])
+        #self.force = np.array([self.direction*self.strength, 0])
+        #self.force = np.array([0,0]) # do sprite references to this get cleared here?
+                                     # or do they still point the same memory location
+        self.force[0] = 0
         self.blowing = True
 
     def update(self):
@@ -1185,6 +1207,10 @@ class Wind:
             self.frame += 1
             if self.frame == self.n_frames:
                 self.blowing = False
+            # ease force up and down with sin curve
+            #self.cycle_point = math.sin(math.pi*self.frame/self.n_frames)
+            self.force[0] = self.direction*self.strength*math.sin(
+                                            math.pi*self.frame/self.n_frames)
         else:
             self.chance()
 
@@ -1385,7 +1411,7 @@ class Game:
       for bubble in PlayerBubble.group:
           bubble.update(self.display_dt)
 
-      if len(Drop.group) < 10:
+      if len(Drop.group) < 1:
           Drop(y=random.randint(-200, -50))
 
       for drop in Drop.group:
@@ -1436,12 +1462,13 @@ class Game:
       screen = pygame.display.set_mode((width, height), pygame.DOUBLEBUF, 32)
       self.screen = screen
       
+      self.wind = Wind()
+      self.ice = Ice()
+
       player1 = Player(pos_x=100)
       player2 = Player(pos_x=WIDTH - 100, skin='hat_red')
 
-      self.ice = Ice()
 
-      self.wind = Wind()
       # store a copy of blank bg image
       self.bg_image = screen.copy()
       self.bg_image.fill(BG_COLOR)
@@ -1476,5 +1503,12 @@ def lerp_quad(t, t_max=1, a=1, b=10):
 netcon = network.NetworkConnection()
 netcon.listen()
 
-game = Game()
+def get_cli_args():
+    args = sys.argv[1:]
+    if len(args) > 0:
+        if args[0].lower() == 'debug':
+            args[0] = True
+    return args
+
+game = Game(*get_cli_args())
 game.run()
