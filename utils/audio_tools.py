@@ -137,11 +137,15 @@ class WaveStream:
         t.start()
         
     def _play_threaded(self):
-        delay = self.segment_dur / 2
+        delay = self.segment_dur / 3 #2
         self.play()
+        misses = 0
         while not self._remote.is_set():
-            if not self.channel.get_queue():
+            if not self.channel.get_queue(): # no chunk is queue'd up
                 self.queue_next()
+                #print('misses:',misses)
+                misses = 0
+            misses += 1
             time.sleep(delay)
         print('music stream was shutdown.')
 

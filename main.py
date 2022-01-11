@@ -164,9 +164,11 @@ class Twinkle(Explosion):
     frames = load_obj_frames(w, h, color, 'explosion.obj', double_size=-1)
     frame_dupes = [1]*10
 
-    def __init__(self, pos):
-        super().__init__(pos)
-        self.offset = np.array([6*random.random(), 24*random.random()])
+    def __init__(self, drop: 'Drop'):
+        super().__init__(drop.pos)
+        self.drop = drop
+        #self.offset = np.array([6*random.random(), 24*random.random()])
+        self.offset = np.array([random.randint(0,12) - 6, random.randint(0,12) - 6])
 
     def draw(self, screen):
         screen.blit(self.frames[self.frame_no], self.pos + self.offset)
@@ -189,7 +191,7 @@ class Drop(pygame.sprite.Sprite):
         self.color_id = random.randint(0, len(self.COLORS)-1)
         self._color = self.COLORS[self.color_id]
         self.color = self._color
-        self.image0 = self._load_image(self.width, self.height, self.color)
+        self.image0 = self._load_image()
         self.image = self.image0.copy()
         self.rect = self.image.get_rect()
 
@@ -234,10 +236,10 @@ class Drop(pygame.sprite.Sprite):
         heappush(self._sectors, s)
         print(self._sectors)
         
-    def _load_image(self, w, h, color):
-        im = self._image_cache.get((w,h,tuple(color)))
+    def _load_image(self):
+        im = self._image_cache.get((self.width,self.height,tuple(self.color)))
         if not im: 
-            w, h = w/2, h/2
+            w, h = self.width/2, self.height/2
             im = pygame.Surface((w,h), pygame.SRCALPHA, 32).convert_alpha()
             self.vertices = [(0, h/7), ((w-1)/3, 1), ((2/3)*(w-1),1),
                                 (w-1, h/8), ((w-1)/2, h-1)]
@@ -246,7 +248,7 @@ class Drop(pygame.sprite.Sprite):
                                 (w-1, h/8), ((w-1)/2, h-1)]
             pygame.draw.polygon(im, self.color.lerp((255,255,255), .25), shading_verts)
             im = pygame.transform.scale2x(im)
-            self._image_cache[(w,h,tuple(color))] = im
+            self._image_cache[(w,h,tuple(self.color))] = im
         return im
         #self.image0 = im
         #self.image = im.copy()
@@ -324,7 +326,7 @@ class Drop(pygame.sprite.Sprite):
 
         # special animations
         if self.frame % self.twinkle_freq == 0:
-            Twinkle(self.pos)# + np.array([0, self.height*random.random()]))
+            Twinkle(self)# + np.array([0, self.height*random.random()]))
 
     def draw(self, screen):
         if self.frame > self.n_ghost_frames:
@@ -346,7 +348,8 @@ class Drop(pygame.sprite.Sprite):
             pygame.draw.polygon(im, self.ghost_colors[i], self.vertices)
             self.ghost_images.append(im)
 
-class Arrow(Drop): #pygame.sprite.Sprite):
+
+class Arrow(Drop):
     group = pygame.sprite.Group()
     power = 5
 
@@ -368,11 +371,11 @@ class Arrow(Drop): #pygame.sprite.Sprite):
         self.tip_offset = self.inner_r*self.aim_vector
         self.aim_center = self.ring_rect.center + np.array(self.tip_offset)
 
-        self.bullet_width = 16
-        self.bullet_height = 48
+        self.width = 16 # arrow width
+        self.height = 48 # arrow height
         self._color = random.choice(self.COLORS)
         self.color = self._color
-        self.image0 = self._load_image(self.bullet_width, self.bullet_height, self.color)
+        self.image0 = self._load_image()
         self.image = self.image0.copy()
         self.rect = self.image.get_rect()
 
@@ -451,6 +454,27 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                 game.sound_fx.play_congrats()
                 game.cam.start_shake()
     
+    def handle_collision_with_arrow(self, arrow, intersection_point):
+        print('arrows intersect')
+        game.sound_fx.start_fx('intercepted')
+        arrow.kill()
+        self.kill()
+        ProjectileExplosion(self.pos+intersection_point)
+
+        # If player uses unfired arrow as a 'shield'
+        # to intercept an arrow fired by another player.
+        if Player.active_slowmo is arrow.player: 
+            game.exit_slow_mo(arrow.player)
+
+        # Award points to whoever fired second,
+        # as they got the 'interception'; If the player
+        # is loaded but hasn't fired, that counts as
+        # 'firing second'.
+        if self.time_since_fired < arrow.time_since_fired:
+            self.player.intercepted_arrow()
+        else:
+            arrow.player.intercepted_arrow()
+
     def collision_with_other_arrows_check(self):
         player_who_fired = self.player
         enemy_arrows = {a for a in Arrow.group if a.player != player_who_fired}
@@ -465,25 +489,7 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                 offset = (arrow.rect.x - self.rect.x, arrow.rect.y - self.rect.y)
                 intersection = mask.overlap(other, offset)
                 if intersection:
-                    print('arrows intersect')
-                    game.sound_fx.start_fx('intercepted')
-                    arrow.kill()
-                    self.kill()
-                    ProjectileExplosion(self.pos+intersection)
-
-                    # If player uses unfired arrow as a 'shield'
-                    # to intercept an arrow fired by another player.
-                    if Player.active_slowmo is arrow.player: 
-                        game.exit_slow_mo(arrow.player)
-
-                    # Award points to whoever fired second,
-                    # as they got the 'interception'; If the player
-                    # is loaded but hasn't fired, that counts as
-                    # 'firing second'.
-                    if self.time_since_fired < arrow.time_since_fired:
-                        self.player.intercepted_arrow()
-                    else:
-                        arrow.player.intercepted_arrow()
+                    self.handle_collision_with_arrow(arrow, intersection)
 
     def fire(self):
         self.fired = True
@@ -530,6 +536,10 @@ class Arrow(Drop): #pygame.sprite.Sprite):
                 bg_color = BG_COLOR #if self.pos_history[i][1] < HEIGHT - 80 else WHITE
                 pygame.draw.line(screen, pygame.Color(255,255,255).lerp(bg_color,(1-i/n)),
                                  self.pos_history[i], self.pos_history[i+1])
+
+class Shield(Arrow):
+    def handle_collision_with_arrow(self, arrow, intersection_point):
+        pass
 
 def assemble_image(surf, obj_filename, color_map):
     path = os.path.join(OBJ_PATH, obj_filename)
@@ -1341,7 +1351,7 @@ class Game:
         font = pygame.font.get_default_font()
         self.font = pygame.font.SysFont(font, 18)
         self.debug_surfs = { }#{1: pygame.Surface((0,0)), 2: pygame.Surface((0,0))}
-        self.music_stream = WaveStream('astley.wav', segment_dur=0.05,
+        self.music_stream = WaveStream('astley.wav', segment_dur=0.02,
                                         stretch=1.5, overwrite=True,
                                         aim_for_even_chunks=True)
         pygame.event.set_allowed([QUIT, KEYDOWN, KEYUP,
