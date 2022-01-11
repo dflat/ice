@@ -197,6 +197,7 @@ class Drop(pygame.sprite.Sprite):
         self.vel = np.array([0,0], dtype=float)
         self.gravity = random.randint(10,40)#(10,40)
         self.acc = np.array([0,0], dtype=float)
+        self.falling = True
         self.t = 0
         self.pos_history = deque(maxlen=self.n_ghost_frames)
         self.frame = 0
@@ -294,9 +295,6 @@ class Drop(pygame.sprite.Sprite):
         if game.wind.blowing:
             self.rotate((self.max_rotation/game.wind.strength)*game.wind.force[0])
 
-        # check if hit ground
-        #if self.rect.bottom > game.ice.top:
-        #    self.register_force(np.array([0, -self.gravity]))
 
         self.acc = self.sum_of_forces() #/ self.mass
 
@@ -304,6 +302,14 @@ class Drop(pygame.sprite.Sprite):
         self.pos += self.vel*dt # testing pos integr. before vel
         self.vel += self.acc*dt
         self.vel[0] *= .90 # horizontal air resistance
+
+        # check if hit ground
+        if self.falling and self.rect.bottom > game.ice.mid:
+            self.falling = False
+            self.pos[1] -= self.vel[1]*dt # roll back position
+            self.vel[1] = 0
+            self.register_force(np.array([0, -self.gravity]), 'ground normal')
+            print('icicle landed')
 
         # clamp off low vel
         #if self.acc[0] == 0 and self.vel[0] < 3:
@@ -658,7 +664,7 @@ class Player(pygame.sprite.Sprite):
         self.frame = 0
         self.friction = 0.99
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
-        self.register_force(game.wind.force*2, 'wind') # register wind force
+        self.register_force(game.wind.force, 'wind') # register wind force
         self.direction = -1
         self.phase = self.phases[0]
         self.getting_hit = False
@@ -1076,6 +1082,7 @@ def vertical_gradient(size, startcolor, endcolor):
 class Ice:
     ground_level = 80
     top = HEIGHT - ground_level #400
+    mid = top + 32
     group = set()
     def __init__(self):
         self.group.add(self)
@@ -1411,7 +1418,7 @@ class Game:
       for bubble in PlayerBubble.group:
           bubble.update(self.display_dt)
 
-      if len(Drop.group) < 1:
+      if len(Drop.group) < 8:
           Drop(y=random.randint(-200, -50))
 
       for drop in Drop.group:
