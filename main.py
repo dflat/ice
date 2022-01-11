@@ -443,10 +443,9 @@ class Arrow(Drop):
                 #  Transfer velocity to hit player. If the shot is fired
                 #  from above, give the hit player a recoil kick up. 
                 arrow_v, power = self.vel, self.power
-                print('power:', power)
                 player.vel[0] += arrow_v[0]*power
-                y_vel = arrow_v[1]*power if arrow_v[1] > 0 else -arrow_v[1]*power
-                player.vel[1] += y_vel 
+                y_vel = -arrow_v[1] if arrow_v[1] > 0 else arrow_v[1]
+                player.vel[1] += y_vel*power 
 
                 ## Remove arrow sprite, animate hit
                 self.kill()
@@ -634,17 +633,9 @@ class Player(pygame.sprite.Sprite):
     }
     W = 64*2
     H = 32*2
-    #reflection_offset = np.array([0, H])
-
-    # defunct
-    #color_map = {'base':pygame.Color(0,0,0), 'belly':pygame.Color(240,240,240),
-    #            'feet':pygame.Color(235,191,73), 'beak': pygame.Color(235,191,73),
-    #            'eyeball':pygame.Color(255,255,255)
-    #            }
 
     def __init__(self, color=PLAYER_COLOR, width=64, height=32, pos_x=0, skin=None):
         super().__init__()
-        #self._register_new_player()
         self.group.add(self) 
         self.width = width*2
         self.height = height*2
@@ -675,7 +666,7 @@ class Player(pygame.sprite.Sprite):
         self.right = False
         self.missed = 0
         self.frame = 0
-        self.friction = 0.99
+        self.friction = 0.97 # 0.99 Test out best value ..
         self.environ_forces = defaultdict(lambda: np.array([0,0], dtype=float))
         self.register_force(game.wind.force, 'wind') # register wind force
         self.direction = -1
@@ -811,7 +802,7 @@ class Player(pygame.sprite.Sprite):
 
     # TODO: fix this hack
     def check_collision_with_ground(self):
-        if self.vel[1] < 0 and self.pos[1] >= Ice.top:# + 2:
+        if self.vel[1] > 0 and self.pos[1] >= Ice.top:# + 2:
             self.jumping = False
             #print('stopped')
             self.vel[1] = 0
@@ -981,29 +972,23 @@ class Player(pygame.sprite.Sprite):
 
         if jump_pressed and not self.jumping:
             print('jump pressed') 
-            self.vel[1] += 1000
+            self.vel[1] -= 1000
             self.jumping = True
 
         ## Set acceleration due to player input
         self.acc[0] = self.acc_x_input*self.MAX_ACC
-
-        ## Check for wind force
-        #if game.wind.blowing:
-        #    self.register_force(game.wind.force*2, 'wind')
-        #else:
-        #    self.clear_force('wind')
 
         ## Add environmental forces (e.g. wind)
         for force in self.environ_forces.values():
             self.acc += force 
 
         ## Apply gravity 
-        self.acc[1] = -3000 # assuming 1m = ~300px and gravity @ -10 m/s
+        self.acc[1] = 3000 # assuming 1m = ~300px and gravity @ -10 m/s
 
 
         self.vel[1] += self.acc[1] * dt
         self.vel[1] = max(-self.MAX_VEL, min(self.vel[1], self.MAX_VEL))
-        self.pos[1] -= self.vel[1] * dt  # _subtract_ y pos due to flipped y-axis
+        self.pos[1] += self.vel[1] * dt  # _subtract_ y pos due to flipped y-axis
 
         self.check_collision_with_ground()
 
@@ -1071,7 +1056,7 @@ class Player(pygame.sprite.Sprite):
         # draw path trace trail (snow clumps)
         n = len(self.pos_history)-1
         r = 32 # random noise bound
-        if self.jumping and self.vel[1] > self.MAX_VEL / 4:# or self.vel[0]==self.MAX_VEL:
+        if self.jumping and -self.vel[1] > self.MAX_VEL / 4:# or self.vel[0]==self.MAX_VEL:
             for i in range(n):
                 if 20 < self.pos_history[i][0] < WIDTH - 20 and random.randint(0,1)==1:
                     pygame.draw.circle(screen, pygame.Color(255,255,255).lerp(
