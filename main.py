@@ -928,11 +928,12 @@ class Player(pygame.sprite.Sprite):
 
         self.fetch_network_input()
 
-        stat = Player.active_slowmo.player_id if Player.active_slowmo else 'None'
-        msg = f'Slow Mo: {stat}, presses: {self.slowmo_triggers}, '\
-        f'enters: {self.slowmo_enters}, exits: {self.slowmo_exits}, '\
-        f'misfires: {self.slowmo_triggers-(self.slowmo_enters+self.slowmo_exits)}'
-        game.print(msg, self.player_id)
+        debug_msg = []
+        debug_msg.append(f'P{self.player_id}:')
+        #stat = Player.active_slowmo.player_id if Player.active_slowmo else 'None'
+        #debug_msg.append(f'Slow Mo: {stat}, presses: {self.slowmo_triggers}, '\
+        #f'enters: {self.slowmo_enters}, exits: {self.slowmo_exits}, '\
+        #f'misfires: {self.slowmo_triggers-(self.slowmo_enters+self.slowmo_exits)}')
 
         ## Only allow one player to slow down time at once
         if self.slow_mo_pressed and self.slow_mo_exit_pressed:
@@ -1026,6 +1027,9 @@ class Player(pygame.sprite.Sprite):
         ## Record position history for ghosting effect
         self.pos_history.append(self.pos.copy())
 
+        debug_msg.append(f'acc: [{self.acc[0]:>8.1f}, {self.acc[1]:>8.1f}]')
+        debug_msg.append(f'vel: [{self.vel[0]:>8.1f}, {self.vel[1]:>8.1f}]')
+
         ## Collision checks
         self.check_drop_collisions() 
         #if self.player_id == 1:
@@ -1038,6 +1042,9 @@ class Player(pygame.sprite.Sprite):
             self.getting_hit = False
         else:
             print('colliding:', len(Player.collisions))
+
+        if True or game.debug_rects:
+            game.print(" ".join(debug_msg), self.player_id)
 
 
     def draw(self, screen):
@@ -1321,9 +1328,9 @@ class Game:
         self.stalled = False
         self.stall_time_left = 0
         self.cam = Camera(self)
-        font = pygame.font.get_default_font()
-        self.font = pygame.font.SysFont(font, 18)
-        self.debug_surfs = { }#{1: pygame.Surface((0,0)), 2: pygame.Surface((0,0))}
+        font = pygame.font.match_font(('menlo', pygame.font.get_default_font()))
+        self.font = pygame.font.Font(font, 20)
+        self.debug_surfs = { }
         self.music_stream = WaveStream('astley.wav', segment_dur=0.02,
                                         stretch=1.5, overwrite=True,
                                         aim_for_even_chunks=True)
