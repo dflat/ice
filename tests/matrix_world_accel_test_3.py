@@ -6,65 +6,25 @@ import time
 import numpy as np
 from collections import deque
 
-pygame.init()
-width, height = 800,600
-DISPLAYSURF = pygame.display.set_mode((width, height), pygame.DOUBLEBUF, 32)
-
-WHITE = pygame.Color(255,255,255)#(255,)*3
-BLACK = pygame.Color(0,0,0)#(0,)*3
-COLORS = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(255,0,255),(0,0,255)]
-loops = 0
-loops_this_sec = 0
-accum_time = 0
-accum_sec = 0
-last_time = time.time()
-FPS = 300
-fps_clock = pygame.time.Clock()
-r = pygame.Rect((0,0),(1,1))
-MAX_VEL = 10_000
-verts = np.array([(2,0,1),(4,2,1),(2,5,1),(0,2,1)], dtype=float)
-HISTORY_TRAIL = 60
-pos_history = deque(np.zeros((HISTORY_TRAIL,2)), maxlen=HISTORY_TRAIL)
-seg_len_history = deque(maxlen=HISTORY_TRAIL-1)
-pos_history_arr = np.zeros((HISTORY_TRAIL, 2))
-norm_history = deque(maxlen=HISTORY_TRAIL)
-vert_history = deque(maxlen=HISTORY_TRAIL)
-GHOST_FRAMES = 60
-BB_LEVELS = 4
-
-old="""
-    nodes = deque([box_tree])
-    a = b = pos_hist_arr
-    level = 0
-    Node._id = 0
-    while level < BB_LEVELS-1:
-        size = (len(a) // 2)
-        #print('level:',level,'size:', size)
-        a, b = a[:size], b[size-1:]
-        for i in range(2**level):
-            points_a = pos_hist_arr[2*i*(size):2*(i+1)*(size)]
-            points_b = pos_hist_arr[i*(size):(i+1)*(size)]
-            cur_node = nodes.popleft()
-            cur_node.a = Node(getAABB(a))
-            cur_node.b = Node(getAABB(b))
-            nodes.append(cur_node.a) 
-            nodes.append(cur_node.b)
-        level += 1        
-"""
 
 class Node:
     _id = 0
-    def __init__(self, val, a=None, b=None):
-        self.val = val
+    def __init__(self, points, a=None, b=None):
+        self.points = points
+        self.rect = getAABB(points)
+        self.line_segment = np.array((points[0], points[-1]))
         self.a = a
         self.b = b
         self.id = Node._id
         Node._id += 1
 
-
+DEBUG_LEVELS = [4]#[0,1,2,3]
 def display_tree(node, level=0):
     if node:
-        pygame.draw.rect(DISPLAYSURF, COLORS[level], node.val, width=2)
+        if level in DEBUG_LEVELS:
+            pygame.draw.rect(DISPLAYSURF, COLORS[level], node.rect, width=1)
+        if level == 3:
+            pygame.draw.line(DISPLAYSURF, COLORS[4], *node.line_segment, width=2)
         display_tree(node.a, level+1) 
         display_tree(node.b, level+1) 
 
@@ -74,8 +34,8 @@ def make_children(node, points, level=1):
         return
     size = len(points) // 2
     a, b = points[:size], points[size-1:]
-    node.a = Node(getAABB(a)) 
-    node.b = Node(getAABB(b)) 
+    node.a = Node(a) 
+    node.b = Node(b) 
     make_children(node.a, a, level+1)
     make_children(node.b, b, level+1)
 
@@ -85,6 +45,7 @@ def intersect(A,B,C,D) -> bool:
     Tests if two line segments AB and CD intersect.
     """
     return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
+
 
 def ccw(A,B,C) -> bool:
     """
@@ -96,14 +57,16 @@ def ccw(A,B,C) -> bool:
     d, c = C - A     # get slope AC d=dx, c=dy -- m2 = dy/dx = c/d 
     return b*c > a*d # if (m1 < m2) => (bc > ad) by simple algebra
 
+
 def getAABB(points):
     top_left = np.min(points,axis=0)
     bot_right = np.max(points,axis=0)
-    #print('tlbr', top_left)
     return pygame.Rect(top_left, bot_right-top_left)
 
-def get_center(verts):
+
+def geom_center(verts):
     return np.sum(verts,axis=0)/len(verts)
+
 
 def get_rot_mat(theta):
     return np.array([(cos(theta), -sin(theta), 0),
@@ -118,16 +81,46 @@ def get_three_to_two_mat():
 def set_translate(M, tx, ty):
     M[:,2] = (tx,ty,1)
 
-t = 0
+## Initialize player variables
+verts = np.array([(2,0,1),(4,2,1),(2,5,1),(0,2,1)], dtype=float)
+HISTORY_TRAIL = 60
+pos_history = deque(np.zeros((HISTORY_TRAIL,2)), maxlen=HISTORY_TRAIL)
+seg_len_history = deque(maxlen=HISTORY_TRAIL-1)
+#pos_history_arr = np.zeros((HISTORY_TRAIL, 2))
+norm_history = deque(maxlen=HISTORY_TRAIL)
+vert_history = deque(maxlen=HISTORY_TRAIL)
+BB_LEVELS = 4
+
+MAX_VEL = 10_000
+center_shift = geom_center(verts) - (0,0,1)
+verts -= center_shift # do this so rotation is about the mesh's geometric center
 offset = np.array([100,100,0])
-geom_center = get_center(verts)
-center_shift = geom_center - (0,0,1)
-verts -= center_shift
 pos_offset = (offset + center_shift)[:2]
 diamond_normal = np.array((0,1))
 vel = np.zeros(2)
 pos = np.array(pos_offset, dtype=float)
-while True: # main game loop
+
+## Initialize game variables
+WIDTH, HEIGHT = 800,600
+pygame.init()
+DISPLAYSURF = pygame.display.set_mode((WIDTH, HEIGHT), pygame.DOUBLEBUF, 32)
+
+WHITE = pygame.Color(255,255,255)#(255,)*3
+BLACK = pygame.Color(0,0,0)#(0,)*3
+COLORS = [(255,0,0),(0,255,0),(0,0,255),(255,255,0),(255,0,255),(0,0,255)]
+
+FPS = 60
+loops = 0
+loops_this_sec = 0
+accum_time = 0
+accum_sec = 0
+last_time = time.time()
+fps_clock = pygame.time.Clock()
+t = 0
+
+### Main game loop
+while True: 
+    ## Time bookkeeping
     loops += 1
     loops_this_sec += 1
     cur_time = time.time()
@@ -138,7 +131,6 @@ while True: # main game loop
     t = accum_time
 
     if accum_sec >= 1:
-        #print(f'{loops/accum_time:.1f} loops/sec')
         print(f'{loops_this_sec/accum_sec:.1f} loops/sec')
         accum_sec = accum_sec - 1
         loops_this_sec = 0
@@ -179,7 +171,7 @@ while True: # main game loop
     theta = np.arccos(dot_prod) 
     theta = theta if mouse_pos[0] < pos[0] else -theta
 
-    speed= min(MAX_VEL, 5*norm)
+    speed = min(MAX_VEL, 5*norm)
     vel = speed*mouse_dir
     pos += vel*dt
     tx = pos[0]
@@ -190,41 +182,31 @@ while True: # main game loop
     A = M.dot(R)
     trans_verts = A.dot(verts.T).T
     render_verts = (trans_verts)[:,:2]
-    tail_offset = pos - render_verts[0]
-    #pos_history.appendleft((pos-tail_offset,norm))
+    #tail_offset = pos - render_verts[0]
     pos_history.appendleft(pos.copy())
     norm_history.appendleft(norm)
-    pos_history_arr[loops % HISTORY_TRAIL] = pos 
-    #pos_history.appendleft((render_verts[0].copy(),norm))
-    #vert_history.appendleft(render_verts)
+    #pos_history_arr[loops % HISTORY_TRAIL] = pos 
 
     ## Draw
-    for i in reversed(range(min(loops-1,GHOST_FRAMES-1))):
-        color = WHITE.lerp(BLACK, i/GHOST_FRAMES)  # 1 is pure BLACK
-        #pygame.draw.polygon(DISPLAYSURF, color, pos_history[i])
+    for i in reversed(range(min(loops-1,HISTORY_TRAIL-1))):
+        color = WHITE.lerp(BLACK, i/HISTORY_TRAIL)  # 1 is pure BLACK
         pygame.draw.line(DISPLAYSURF, color, pos_history[i], pos_history[i+1],
-                         width=max(1, int(norm)//20))#int(pos_history[i][1])//10)
+                         #width=max(1, int(norm)//20))
+                         width=max(1, int(norm_history[i])//20))
     pygame.draw.polygon(DISPLAYSURF, WHITE, render_verts)
     pygame.draw.aalines(DISPLAYSURF, WHITE, True, render_verts)
 
-
-
     # build bbox tree
     pos_hist_arr = np.array(pos_history)
-    box_tree = Node(getAABB(pos_hist_arr))
-    make_children(box_tree, pos_hist_arr)
+    box_tree = Node(pos_hist_arr) # todo: use views into slices of pos_hist_arr...
+    make_children(box_tree, pos_hist_arr) # ...should be significant efficiency gain
+                                        # would only have to build the tree structure
+                                        # once, instead of every frame...
+                                        # and could just recalculate rects every frame.
+                                        # as Node points would be views into pos_hist_arr
 
     ## Debugging rects
     display_tree(box_tree)
 
-    #pygame.draw.rect(DISPLAYSURF, COLORS[level], cur_node.a.val, width=2)
-    #pygame.draw.rect(DISPLAYSURF, COLORS[level], cur_node.b.val, width=2)
-
-    #tail_B0 = getAABB(pos_hist_arr) # todo: make pos_history an ndarray or something
-    #pygame.draw.rect(DISPLAYSURF, COLORS[0], tail_B0, width=2)
-    #tail_B1_a = getAABB(pos_hist_arr[:HISTORY_TRAIL//2]) 
-    #tail_B1_b = getAABB(pos_hist_arr[min(loops-1,HISTORY_TRAIL//2 - 1):]) 
-    #pygame.draw.rect(DISPLAYSURF, COLORS[1], tail_B1_a, width=1)
-    #pygame.draw.rect(DISPLAYSURF, COLORS[1], tail_B1_b, width=1)
-
     pygame.display.flip()
+    fps_clock.tick(FPS)
